@@ -1,0 +1,48 @@
+name: Apply Planning Suite Lite
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-planning-suite-lite.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: improve-firebase-security
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply planning suite patch
+        run: python3 tools/apply_planning_suite_lite.py
+
+      - name: Build
+        working-directory: holifriday-app
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit and push
+        run: |
+          git config user.name "ChatGPT"
+          git config user.email "actions@github.com"
+          if git diff --quiet holifriday-app/src/App.tsx; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git add holifriday-app/src/App.tsx
+          git commit -m "Add planning suite features"
+          git push origin HEAD:improve-firebase-security
