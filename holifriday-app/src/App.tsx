@@ -695,7 +695,7 @@ function mapAuthError(code) {
   }
 }
 
-function AuthGate() {
+function AuthGate({ onOpenPlanningPreview }: { onOpenPlanningPreview?: () => void }) {
   const [mode, setMode] = useState("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -857,6 +857,14 @@ function AuthGate() {
               Tip: If nothing arrives, check spam and verify Email/Password is enabled in Firebase Auth.
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => onOpenPlanningPreview?.()}
+            style={{ marginTop: 10, width: "100%", border: "1px solid #dbe8ff", background: "#eef4ff", color: "#1f5ecf", borderRadius: 10, padding: "9px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+          >
+            Open Planning Preview (no login)
+          </button>
 
           <div style={{ marginTop: 10, minHeight: 18, fontSize: 12, color: noticeType === "success" ? "#00a35a" : "#e2445c" }}>{notice}</div>
         </div>
@@ -2936,8 +2944,53 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
+function GuestPlanningPreview({ onBackToLogin }: { onBackToLogin: () => void }) {
+  const [activePreviewBoardId, setActivePreviewBoardId] = useState(INITIAL_BOARDS[0].id);
+  const previewBoard = INITIAL_BOARDS.find(b => b.id === activePreviewBoardId) || INITIAL_BOARDS[0];
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "#f7f8fc" }}>
+      <div style={{ padding: "14px 20px", background: "#fff", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 18, fontWeight: 900, color: "#1f1f3b" }}>Planning Preview</div>
+        <div style={{ fontSize: 12, color: "#676879" }}>You are in guest mode. Data is read-only preview before login.</div>
+        <select
+          value={activePreviewBoardId}
+          onChange={e => setActivePreviewBoardId(Number(e.target.value))}
+          style={{ marginLeft: "auto", border: "1px solid #d8dbe4", borderRadius: 8, padding: "6px 10px", fontSize: 12, background: "#fff", color: "#323338" }}
+        >
+          {INITIAL_BOARDS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <button onClick={onBackToLogin} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          Back to Login
+        </button>
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <PMPlanningView board={previewBoard} onOpen={() => {}} />
+      </div>
+    </div>
+  );
+}
+
 function AppContent() {
   useEffect(() => { document.title = "HOLIFRIDAY"; }, []);
+  const [guestPlanningMode, setGuestPlanningMode] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("view") === "planning";
+    } catch {
+      return false;
+    }
+  });
+
+  function setGuestPlanningWithQuery(enabled: boolean) {
+    setGuestPlanningMode(enabled);
+    try {
+      const url = new URL(window.location.href);
+      if (enabled) url.searchParams.set("view", "planning");
+      else url.searchParams.delete("view");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    } catch {}
+  }
+
   const [authUser, setAuthUser] = useState(null);
   const [authReady, setAuthReady] = useState(() => {
     // If no firebase auth configured, skip waiting
@@ -3117,6 +3170,10 @@ function AppContent() {
   }
 
   if (!firebaseAuth) {
+    if (guestPlanningMode) {
+      return <GuestPlanningPreview onBackToLogin={() => setGuestPlanningWithQuery(false)} />;
+    }
+
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(140deg, #eef3ff 0%, #f8f4ff 42%, #fff4f1 100%)", padding: 16 }}>
         <div style={{ maxWidth: 520, background: "#fff", borderRadius: 16, border: "1px solid #eceef5", boxShadow: "0 10px 30px rgba(0,0,0,.1)", padding: 24 }}>
@@ -3124,6 +3181,9 @@ function AppContent() {
           <div style={{ marginTop: 8, color: "#676879", fontSize: 13, lineHeight: 1.6 }}>
             Please configure Firebase first, especially VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_DATABASE_URL.
           </div>
+          <button onClick={() => setGuestPlanningWithQuery(true)} style={{ marginTop: 12, border: "1px solid #dbe8ff", background: "#eef4ff", color: "#1f5ecf", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            Open Planning Preview
+          </button>
         </div>
       </div>
     );
@@ -3138,7 +3198,10 @@ function AppContent() {
   }
 
   if (!authUser) {
-    return <AuthGate />;
+    if (guestPlanningMode) {
+      return <GuestPlanningPreview onBackToLogin={() => setGuestPlanningWithQuery(false)} />;
+    }
+    return <AuthGate onOpenPlanningPreview={() => setGuestPlanningWithQuery(true)} />;
   }
 
   if (!boardsFirebaseLoaded) {
