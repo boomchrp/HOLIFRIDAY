@@ -3381,8 +3381,11 @@ function AppContent() {
     const localNextRaw = updater(localPrevBoard);
     const localNextBoard = stampBoardTaskMetadata(localPrevBoard, localNextRaw, actorEmail);
 
+    // Optimistic update: reflect the selected status/priority immediately.
+    // Server conflict checks continue in background and may open merge dialog if needed.
+    setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+
     if (!firebaseDb) {
-      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
       return;
     }
 
@@ -3392,7 +3395,6 @@ function AppContent() {
       const serverBoard = asArray(serverBoards).find(b => b.id === boardId);
 
       if (!serverBoard) {
-        setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
         return;
       }
 
@@ -3408,11 +3410,8 @@ function AppContent() {
         });
         return;
       }
-
-      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
     } catch (err) {
-      console.warn("Conflict check failed, saving local changes:", err);
-      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+      console.warn("Conflict check failed, keeping optimistic local changes:", err);
     }
   };
 
