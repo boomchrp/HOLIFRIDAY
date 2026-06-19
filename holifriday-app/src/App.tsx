@@ -3512,6 +3512,84 @@ function AppContent() {
     await signOut(firebaseAuth);
   }
 
+
+  function handleExportBoards() {
+    try {
+      const payload = {
+        app: "HOLIFRIDAY",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        exportedBy: authUser?.email || "",
+        boards,
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      a.href = url;
+      a.download = `holifriday-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+      window.alert("Export failed. Please try again.");
+    }
+  }
+
+  function handleImportBoards() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const raw = JSON.parse(String(reader.result || "{}"));
+          const importedBoards = Array.isArray(raw) ? raw : raw.boards;
+
+          if (!Array.isArray(importedBoards)) {
+            window.alert("Invalid HOLIFRIDAY backup file.");
+            return;
+          }
+
+          const normalized = normalizeBoards(importedBoards, INITIAL_BOARDS);
+          if (!normalized.length) {
+            window.alert("Backup file has no boards.");
+            return;
+          }
+
+          const ok = window.confirm(
+            `Import ${normalized.length} board(s)? This will replace the current boards for everyone using this shared workspace.`
+          );
+
+          if (!ok) return;
+
+          setBoards(normalized);
+          setActiveId(normalized[0]?.id || INITIAL_BOARDS[0].id);
+          setActiveView("boards");
+          window.alert("Import completed.");
+        } catch (err) {
+          console.error("Import failed:", err);
+          window.alert("Import failed. Please check the JSON file.");
+        }
+      };
+
+      reader.readAsText(file);
+    };
+
+    input.click();
+  }
+
   function clearInviteQuery() {
     try {
       const url = new URL(window.location.href);
@@ -3679,6 +3757,8 @@ function AppContent() {
               <span>🔍</span><span>Search all boards</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
             </button>
+            <button onClick={handleExportBoards} title="Export boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export backup</button>
+            <button onClick={handleImportBoards} title="Import boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Import backup</button>
             {/* Dark mode toggle */}
             <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
               {dark ? "☀️" : "🌙"}
