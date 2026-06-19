@@ -1,0 +1,31 @@
+{
+  "rules": {
+    "holifriday": {
+      "boards": {
+        "$boardId": {
+          ".read": "auth != null && data.child('members').child(auth.uid).exists()",
+          ".write": "auth != null && (data.child('members').child(auth.uid).child('role').val() === 'admin' || data.child('members').child(auth.uid).child('role').val() === 'editor')",
+
+          "members": {
+            "$uid": {
+              ".read": "auth != null && data.parent().parent().child('members').child(auth.uid).exists()",
+              ".write": "auth != null && data.parent().parent().child('members').child(auth.uid).child('role').val() === 'admin'"
+            }
+          },
+
+          "groups": {
+            "$groupId": {
+              ".validate": "newData.hasChildren(['id', 'name', 'color'])"
+            }
+          },
+
+          "tasks": {
+            "$taskId": {
+              ".validate": "newData.hasChildren(['id', 'name', 'status', 'priority'])"
+            }
+          }
+        }
+      }
+    }
+  }
+}
