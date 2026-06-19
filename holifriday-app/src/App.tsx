@@ -43,6 +43,19 @@ const PRIORITY_OPTIONS = [
 ];
 const SIGNUPS_TABLE = "user_signups";
 const SHARED_BOARDS_PATH = "holifriday/sharedBoards/main";
+const DEFAULT_WORKSPACE_ID = "main";
+function normalizeWorkspaceId(value) {
+  const raw = asText(value, DEFAULT_WORKSPACE_ID).trim().toLowerCase();
+  return raw.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || DEFAULT_WORKSPACE_ID;
+}
+function getWorkspaceIdFromLocation() {
+  try { return normalizeWorkspaceId(new URLSearchParams(window.location.search).get("workspace") || DEFAULT_WORKSPACE_ID); }
+  catch { return DEFAULT_WORKSPACE_ID; }
+}
+function getBoardsPath(workspaceId = DEFAULT_WORKSPACE_ID) {
+  const id = normalizeWorkspaceId(workspaceId);
+  return id === DEFAULT_WORKSPACE_ID ? SHARED_BOARDS_PATH : `holifriday/workspaces/${id}/boards`;
+}
 
 const INITIAL_BOARDS = [
   {
@@ -284,6 +297,10 @@ function normalizeTask(task, index) {
     priority: validPriority,
     start: asText(task?.start, ""),
     due: asText(task?.due, ""),
+    pmReviewDate: asText(task?.pmReviewDate, ""),
+    effortHours: numberOrDefault(task?.effortHours, 0),
+    reviewBufferDays: numberOrDefault(task?.reviewBufferDays, 1),
+    revisionBufferDays: numberOrDefault(task?.revisionBufferDays, 1),
     tags: asArray(task?.tags).filter(t => typeof t === "string"),
     comments: asArray(task?.comments).map((c, i) => ({
       id: c?.id ?? uid(),
@@ -635,8 +652,8 @@ function useLocalStorage(key, init) {
   return [val, setVal];
 }
 
-function useSyncedBoards(key, init, uid) {
-  const dbPath = firebaseDb ? SHARED_BOARDS_PATH : null;
+function useSyncedBoards(key, init, uid, workspaceId = DEFAULT_WORKSPACE_ID) {
+  const dbPath = firebaseDb ? getBoardsPath(workspaceId) : null;
   const [val, setVal] = useState<typeof init | null>(null); // null = not yet loaded from server
   const [loaded, setLoaded] = useState(false);
   const [loadedUid, setLoadedUid] = useState<string | undefined>(undefined);
@@ -1718,7 +1735,7 @@ function TeamScheduleView({ board, onOpen }: any) {
         if (!range) return null;
         const duration = diffDays(range.start, range.end) + 1;
         const effort = getEffortHours(item);
-        return { ...item, _start: range.start, _end: range.end, _duration: duration, _effortHours: effort, _hoursPerDay: duration > 0 ? (effort > 0 ? effort / duration : 1) : 0, _analysis: getPlanningAnalysis(item, capacity) };
+        return { ...item, _start: range.start, _end: range.end, _duration: duration, _effortHours: effort, _hoursPerDay: duration > 0 ? (effort > 0 ? effort / duration : 1) : 0, _ownerCapacity: getOwnerCapacity(board, item.owner, capacity), _analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, capacity)) };
       })
       .filter(Boolean)
       .filter(item => !hideDone || item.status !== "Done");
@@ -1766,7 +1783,8 @@ function TeamScheduleView({ board, onOpen }: any) {
     const list = tasksByOwner.get(owner) || [];
     const byDate = workload.get(owner) || new Map();
     const loadHours = Array.from(byDate.values()).reduce((sum, v) => sum + v.reduce((s, t) => s + (t._hoursPerDay || 0), 0), 0);
-    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > capacity).length;
+    const ownerCapacity = getOwnerCapacity(board, owner, capacity);
+    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > ownerCapacity).length;
     const overdue = list.filter(t => isOverdue(t.due) && t.status !== "Done").length;
     const dueSoon = list.filter(t => isDueSoon(t.due) && t.status !== "Done").length;
     return { owner, taskCount: list.length, loadHours, overloadDays, overdue, dueSoon };
@@ -1847,36 +1865,33 @@ function TeamScheduleView({ board, onOpen }: any) {
             ) : visibleOwners.map(owner => {
               const byDate = workload.get(owner) || new Map();
               return (
-                <div key={owner} style={{ display: "grid", gridTemplateColumns: `220px repeat(${days}, minmax(46px, 1fr))`, minHeight: 72, borderBottom: "1px solid #f0f2f8", background: "#fff" }}>
-                  <div style={{ padding: "12px", borderRight: "1px solid #f0f2f8", position: "sticky", left: 0, background: "#fff", zIndex: 1 }}>
+                <div key={owner} style={{ display: "grid", gridTemplateColumns: "220px 1fr", minHeight: Math.max(76, ((tasksByOwner.get(owner) || []).length * 28) + 24), borderBottom: "1px solid #f0f2f8", background: "#fff" }}>
+                  <div style={{ padding: "12px", borderRight: "1px solid #f0f2f8", position: "sticky", left: 0, background: "#fff", zIndex: 3 }}>
                     <div style={{ fontSize: 13, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner}</div>
                     <div style={{ marginTop: 3, fontSize: 11, color: "#98a1b3" }}>{(tasksByOwner.get(owner) || []).length} scheduled tasks</div>
                   </div>
-                  {dayList.map(day => {
-                    const key = day.toISOString().slice(0, 10);
-                    const list = byDate.get(key) || [];
-                    const loadHours = list.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0);
-                    const overloaded = loadHours > capacity;
-                    const intensity = Math.min(loadHours / Math.max(maxLoad, capacity), 1);
-                    return (
-                      <div key={key} style={{ minHeight: 72, padding: 4, borderLeft: "1px solid #f7f8fc", background: overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.06 + intensity * 0.16})` : "#fff" }}>
-                        {list.length > 0 && (
-                          <div style={{ display: "flex", justifyContent: "center", marginBottom: 3 }}>
-                            <span style={{ background: overloaded ? "#fdab3d" : "#0073ea", color: "#fff", borderRadius: 12, padding: "1px 6px", fontSize: 10, fontWeight: 900 }}>{Math.round(loadHours * 10) / 10}h</span>
-                          </div>
-                        )}
-                        {list.slice(0, 2).map(task => {
-                          const color = STATUS_OPTIONS.find(s => s.label === task.status)?.color || task._groupColor || "#579bfc";
-                          return (
-                            <button key={task.id} onClick={() => onOpen(task)} title={`${task.name} • ${task._groupName}`} style={{ width: "100%", marginBottom: 3, border: "none", borderLeft: `3px solid ${color}`, background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderRadius: 5, padding: "3px 4px", fontSize: 10, fontWeight: 700, color: "#323338", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {task.name}
-                            </button>
-                          );
-                        })}
-                        {list.length > 2 && <div style={{ fontSize: 10, color: overloaded ? "#a56600" : "#676879", textAlign: "center", fontWeight: 800 }}>+{list.length - 2} more</div>}
-                      </div>
-                    );
-                  })}
+                  <div style={{ position: "relative", minHeight: Math.max(76, ((tasksByOwner.get(owner) || []).length * 28) + 24), display: "grid", gridTemplateColumns: `repeat(${days}, minmax(46px, 1fr))` }}>
+                    {dayList.map(day => {
+                      const key = day.toISOString().slice(0, 10);
+                      const list = byDate.get(key) || [];
+                      const loadHours = list.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0);
+                      const ownerCapacity = getOwnerCapacity(board, owner, capacity);
+                      const overloaded = loadHours > ownerCapacity;
+                      const intensity = Math.min(loadHours / Math.max(maxLoad, ownerCapacity), 1);
+                      return <div key={key} title={list.length ? `${Math.round(loadHours * 10) / 10}h • ${list.length} task(s)` : ""} style={{ borderLeft: "1px solid #f7f8fc", background: overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.04 + intensity * 0.12})` : "#fff" }}>{overloaded && <div style={{ height: 4, background: "#fdab3d" }} />}</div>;
+                    })}
+                    {(tasksByOwner.get(owner) || []).map((task, idx) => {
+                      const startIndex = Math.max(0, diffDays(today, task._start));
+                      const endIndex = Math.min(days - 1, diffDays(today, task._end));
+                      if (endIndex < 0 || startIndex >= days) return null;
+                      const span = Math.max(1, endIndex - startIndex + 1);
+                      const left = (startIndex / days) * 100;
+                      const width = (span / days) * 100;
+                      const color = STATUS_OPTIONS.find(s => s.label === task.status)?.color || task._groupColor || "#579bfc";
+                      const totalDays = diffDays(task._start, task._end) + 1;
+                      return <button key={task.id} onClick={() => onOpen(task)} title={`${task.name} • ${task._groupName} • ${totalDays} day(s)`} style={{ position: "absolute", left: `${left}%`, width: `calc(${width}% - 6px)`, top: 12 + idx * 28, height: 22, border: "none", borderRadius: totalDays > 1 ? 999 : 6, background: color, color: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,.16)", padding: "0 8px", fontSize: 10, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "left", zIndex: 2 }}>{task.name}</button>;
+                    })}
+                  </div>
                 </div>
               );
             })}
@@ -1893,6 +1908,164 @@ function TeamScheduleView({ board, onOpen }: any) {
   );
 }
 
+
+
+function MyWorkView({ board, currentUserEmail, currentUserName, onOpen }: any) {
+  const today = new Date(new Date().toDateString());
+  const meEmail = normalizeEmail(currentUserEmail);
+  const meName = normalizeOwner(currentUserName || currentUserEmail);
+
+  function isMine(owner) {
+    const ownerText = normalizeOwner(owner);
+    if (!meEmail && (!meName || meName === "No owner")) return true;
+    return normalizeEmail(ownerText) === meEmail || ownerText.toLowerCase() === meName.toLowerCase();
+  }
+
+  const tasks = asArray(board?.groups)
+    .flatMap(group => asArray(group.items).map(item => ({ ...item, _groupName: group.name, _groupColor: group.color })))
+    .filter(item => isMine(item.owner))
+    .filter(item => !["Done", "Submitted", "Approved"].includes(item.status))
+    .map(item => ({ ...item, _analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 6)) }))
+    .sort((a, b) => {
+      const ad = parseDateOnly(a.due)?.getTime?.() || 9e15;
+      const bd = parseDateOnly(b.due)?.getTime?.() || 9e15;
+      return ad - bd;
+    });
+
+  const buckets = [
+    { key: "overdue", title: "Overdue", icon: "⚠️", color: "#e2445c", items: tasks.filter(t => isOverdue(t.due)) },
+    { key: "today", title: "Due Today", icon: "📍", color: "#fdab3d", items: tasks.filter(t => parseDateOnly(t.due) && diffDays(today, parseDateOnly(t.due)) === 0) },
+    { key: "week", title: "This Week", icon: "📅", color: "#579bfc", items: tasks.filter(t => { const d = parseDateOnly(t.due); if (!d) return false; const n = diffDays(today, d); return n > 0 && n <= 7; }) },
+    { key: "pm", title: "PM / Review", icon: "✅", color: "#a25ddc", items: tasks.filter(t => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(t.status) || isPmReviewDueSoon(t)) },
+    { key: "later", title: "Later / No Due", icon: "🧭", color: "#676879", items: tasks.filter(t => { const d = parseDateOnly(t.due); if (!d) return true; return diffDays(today, d) > 7; }) },
+  ];
+
+  const uniqueBuckets = buckets.map(b => ({ ...b, items: Array.from(new Map(b.items.map(i => [i.id, i])).values()) }));
+
+  function TaskMiniCard({ item, color }: any) {
+    const statusColor = STATUS_OPTIONS.find(s => s.label === item.status)?.color || "#c4c4c4";
+    const due = parseDateOnly(item.due);
+    const dueText = due ? `${item.due} (${diffDays(today, due)}d)` : "No due date";
+    return (
+      <button onClick={() => onOpen(item)} style={{ width: "100%", textAlign: "left", border: "1px solid #eef1f7", borderLeft: `4px solid ${color}`, borderRadius: 10, background: "#fff", padding: "10px 12px", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,.04)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+            <div style={{ marginTop: 3, fontSize: 11, color: "#98a1b3" }}>{item._groupName} • {dueText}</div>
+          </div>
+          <span style={{ flexShrink: 0, background: statusColor, color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 900 }}>{item.status}</span>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: item._analysis.riskColor, fontWeight: 800 }}>{item._analysis.risk} • {item._analysis.reason}</div>
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px 28px", background: "#f6f7fb" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 900, color: "#323338" }}>👤 My Work</h2>
+          <div style={{ marginTop: 4, fontSize: 12, color: "#676879" }}>Personal task inbox for {meEmail || meName || "current user"}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 999, padding: "5px 10px", fontSize: 12, fontWeight: 800, color: "#323338" }}>{tasks.length} active</span>
+          <span style={{ background: "#fdeef1", color: "#e2445c", borderRadius: 999, padding: "5px 10px", fontSize: 12, fontWeight: 800 }}>{uniqueBuckets[0].items.length} overdue</span>
+        </div>
+      </div>
+
+      {tasks.length === 0 ? (
+        <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, padding: 32, textAlign: "center", color: "#98a1b3" }}>No active tasks assigned to you.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+          {uniqueBuckets.map(bucket => (
+            <div key={bucket.key} style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, padding: 14, boxShadow: "0 2px 8px rgba(0,0,0,.05)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 900, color: "#323338" }}>{bucket.icon} {bucket.title}</div>
+                <span style={{ background: bucket.color, color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 11, fontWeight: 900 }}>{bucket.items.length}</span>
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {bucket.items.length === 0 ? <div style={{ fontSize: 12, color: "#c4cad6", padding: "8px 0" }}>No tasks</div> : bucket.items.map(item => <TaskMiniCard key={`${bucket.key}-${item.id}`} item={item} color={bucket.color} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CriticalPathView({ board, onOpen }: any) {
+  const today = new Date(new Date().toDateString());
+  const active = asArray(board?.groups)
+    .flatMap(group => asArray(group.items).map(item => ({ group, item, range: getTaskRange(item), analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 6)) })))
+    .filter(r => !["Done", "Submitted", "Approved"].includes(r.item.status));
+
+  const scored = active.map(r => {
+    const riskWeight = r.analysis.risk === "At Risk" || r.analysis.risk === "Invalid" ? 60 : r.analysis.risk === "Tight Review" ? 45 : r.analysis.risk === "Tight" ? 30 : r.analysis.risk === "Missing deadline" ? 20 : 0;
+    const slackPenalty = r.analysis.slackDays == null ? 0 : Math.max(0, 14 - r.analysis.slackDays);
+    const effortScore = Math.min(20, getEffortHours(r.item) / 2);
+    const overdueScore = isOverdue(r.item.due) ? 35 : 0;
+    return { ...r, score: Math.round(riskWeight + slackPenalty + effortScore + overdueScore) };
+  }).sort((a, b) => b.score - a.score);
+
+  const critical = scored.filter(r => r.score > 0 || ["At Risk", "Invalid", "Tight Review", "Tight"].includes(r.analysis.risk)).slice(0, 12);
+  const timeline = [...critical].sort((a, b) => {
+    const ad = rDate(a);
+    const bd = rDate(b);
+    return ad - bd;
+  });
+  function rDate(r) { return (r.analysis.suggestedStart || r.range?.start || parseDateOnly(r.item.due) || today).getTime(); }
+
+  const dates = timeline.flatMap(r => [r.analysis.suggestedStart, r.analysis.finalDeadline, r.range?.start, r.range?.end].filter(Boolean));
+  const start = dates.length ? new Date(Math.min(...dates.map((d:any) => d.getTime()))) : today;
+  const end = dates.length ? new Date(Math.max(...dates.map((d:any) => d.getTime()))) : addDays(today, 14);
+  const total = Math.max(1, diffDays(start, end) + 1);
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px 28px", background: "#f6f7fb" }}>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 900, color: "#323338" }}>🧭 Critical Path</h2>
+        <div style={{ marginTop: 4, fontSize: 12, color: "#676879" }}>Tasks most likely to affect the final deadline. This is schedule-risk based until dependencies are added.</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, padding: 14 }}><div style={{ fontSize: 11, color: "#98a1b3", fontWeight: 800 }}>CRITICAL TASKS</div><div style={{ fontSize: 28, fontWeight: 900, color: "#e2445c" }}>{critical.length}</div></div>
+        <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, padding: 14 }}><div style={{ fontSize: 11, color: "#98a1b3", fontWeight: 800 }}>OVERDUE IN PATH</div><div style={{ fontSize: 28, fontWeight: 900, color: "#fdab3d" }}>{critical.filter(r => isOverdue(r.item.due)).length}</div></div>
+        <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, padding: 14 }}><div style={{ fontSize: 11, color: "#98a1b3", fontWeight: 800 }}>HIGHEST SCORE</div><div style={{ fontSize: 28, fontWeight: 900, color: "#0073ea" }}>{critical[0]?.score || 0}</div></div>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,.05)", marginBottom: 16 }}>
+        <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef1f7", fontSize: 14, fontWeight: 900, color: "#323338" }}>Critical Timeline</div>
+        {timeline.length === 0 ? <div style={{ padding: 24, color: "#98a1b3", textAlign: "center" }}>No critical tasks detected.</div> : timeline.map((r, idx) => {
+          const s = r.analysis.suggestedStart || r.range?.start || today;
+          const e = r.analysis.finalDeadline || r.range?.end || s;
+          const left = Math.max(0, diffDays(start, s)) / total * 100;
+          const width = Math.max(3, (diffDays(s, e) + 1) / total * 100);
+          const color = r.analysis.riskColor || STATUS_OPTIONS.find(x => x.label === r.item.status)?.color || "#579bfc";
+          return <div key={r.item.id} style={{ display: "grid", gridTemplateColumns: "260px 1fr 70px", gap: 12, alignItems: "center", padding: "10px 14px", borderBottom: "1px solid #f5f6fb" }}>
+            <button onClick={() => onOpen(r.item)} style={{ border: "none", background: "transparent", textAlign: "left", cursor: "pointer", minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{idx + 1}. {r.item.name}</div>
+              <div style={{ fontSize: 11, color: "#98a1b3" }}>{r.group.name} • {r.item.owner || "No owner"}</div>
+            </button>
+            <div style={{ height: 24, background: "#f0f2f8", borderRadius: 999, position: "relative" }}>
+              <div style={{ position: "absolute", left: `${left}%`, width: `${Math.min(width, 100 - left)}%`, top: 4, height: 16, borderRadius: 999, background: color, boxShadow: "0 2px 6px rgba(0,0,0,.14)" }} />
+            </div>
+            <div style={{ textAlign: "right", fontSize: 11, fontWeight: 900, color }}>{r.score}</div>
+          </div>;
+        })}
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef1f7", fontSize: 14, fontWeight: 900, color: "#323338" }}>Why these tasks are critical</div>
+        {critical.map(r => <button key={`why-${r.item.id}`} onClick={() => onOpen(r.item)} style={{ width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #f5f6fb", background: "#fff", padding: "11px 14px", cursor: "pointer" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><b style={{ color: "#323338", fontSize: 13 }}>{r.item.name}</b><span style={{ color: r.analysis.riskColor, fontWeight: 900, fontSize: 11 }}>{r.analysis.risk}</span></div>
+          <div style={{ marginTop: 4, color: "#676879", fontSize: 11 }}>{r.analysis.reason}</div>
+          <div style={{ marginTop: 4, color: "#98a1b3", fontSize: 10 }}>Suggested start: {formatDateOnly(r.analysis.suggestedStart) || "—"} • PM: {formatDateOnly(r.analysis.suggestedPmReview) || "—"} • Final: {formatDateOnly(r.analysis.finalDeadline) || "—"}</div>
+        </button>)}
+      </div>
+    </div>
+  );
+}
 
 function PMPlanningView({ board, onOpen, onUpdateCapacity }: any) {
   const [fallbackCapacity, setFallbackCapacity] = useState(6);
@@ -2059,6 +2232,39 @@ function autoOwner(board){const owners=getBoardOwners(board).filter(o=>o&&o!=="N
 function boardHealth(board){const items=asArray(board.groups).flatMap(g=>asArray(g.items));const total=items.length;const done=items.filter(i=>["Done","Submitted","Approved"].includes(i.status)).length;const overdue=items.filter(i=>isOpenPlanningTask(i)&&isOverdue(i.due)).length;const unassigned=items.filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)==="No owner").length;const risk=items.filter(i=>["At Risk","Invalid","Tight Review"].includes(getPlanningAnalysis(i,getOwnerCapacity(board,i.owner,6)).risk)).length;const score=Math.max(0,Math.min(100,Math.round(100-overdue*12-risk*8-unassigned*5+(total?done/total:1)*20)));return{score,total,done,overdue,unassigned,risk,level:score>=80?"Good":score>=60?"Medium":"Risky"};}
 function PlanningSuitePanel({boards,onPatchBoard}:any){const{dark}=useDark();const card=dark?"#16213e":"#fff";const text=dark?"#e0e0f0":"#323338";const sub=dark?"#8888aa":"#676879";const bdr=dark?"#2a2a4a":"#eef1f7";const records=useMemo(()=>getBoardTaskRecords(boards),[boards]);const conflicts=useMemo(()=>planningConflicts(boards),[boards]);const health=useMemo(()=>asArray(boards).map(board=>({board,...boardHealth(board)})),[boards]);const unassigned=records.filter(({item})=>isOpenPlanningTask(item)&&normalizeOwner(item.owner)==="No owner").slice(0,8);const risky=records.filter(({item})=>isOpenPlanningTask(item)).map(r=>({...r,a:getPlanningAnalysis(r.item,getOwnerCapacity(r.board,r.item.owner,6))})).filter(r=>["At Risk","Invalid","Tight Review","Tight","Missing deadline"].includes(r.a.risk)).slice(0,8);const pm=records.filter(({item})=>isOpenPlanningTask(item)&&(["Ready for PM Review","PM Reviewing","Need Revision"].includes(item.status)||isPmReviewDueSoon(item))).slice(0,8);const upd=(r,patch)=>onPatchBoard?.(r.board.id,board=>patchTaskOnBoard(board,r.group.id,r.item.id,patch));return <div style={{display:"grid",gap:18,marginBottom:18}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14}}>{health.map(h=><div key={h.board.id} style={{background:card,borderRadius:12,padding:"14px 16px",border:`1px solid ${bdr}`,borderLeft:`5px solid ${h.score>=80?"#00c875":h.score>=60?"#fdab3d":"#e2445c"}`}}><div style={{fontSize:11,color:sub,fontWeight:800}}>PROJECT HEALTH</div><div style={{fontSize:26,fontWeight:900,color:text}}>{h.score}% <span style={{fontSize:12}}>{h.level}</span></div><div style={{fontSize:11,color:sub}}>{h.board.name}</div><div style={{fontSize:11,color:sub,marginTop:6}}>Done {h.done}/{h.total} • Risk {h.risk} • Overdue {h.overdue} • No owner {h.unassigned}</div></div>)}</div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:18}}><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>⚠️ Workload Conflict Warning</b><div style={{fontSize:12,color:sub,marginTop:4}}>Daily workload above capacity.</div>{conflicts.length===0?<p style={{fontSize:12,color:sub}}>No overload detected.</p>:conflicts.map(c=><div key={`${c.board.id}-${c.owner}-${c.date}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`,background:dark?"#211a14":"#fff8e6"}}><b style={{fontSize:12,color:text}}>{c.owner}</b><span style={{float:"right",fontSize:11,color:"#d4900a",fontWeight:900}}>{Math.round(c.hours*10)/10}h / {c.cap}h</span><div style={{fontSize:11,color:sub}}>{c.board.name} • {c.date}</div><div style={{fontSize:10,color:sub}}>{c.tasks.slice(0,3).join(" • ")}</div></div>)}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>🤖 Auto Assign Owner</b><div style={{fontSize:12,color:sub,marginTop:4}}>Suggest least-loaded person.</div>{unassigned.length===0?<p style={{fontSize:12,color:sub}}>No unassigned tasks.</p>:unassigned.map(r=>{const rec=autoOwner(r.board);return <div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`}}><div style={{fontSize:12,fontWeight:800,color:text}}>{r.item.name}</div><div style={{fontSize:11,color:sub}}>Recommend: <b>{rec?.owner||"Add team member first"}</b></div>{rec&&<button onClick={()=>upd(r,{owner:rec.owner})} style={{marginTop:7,border:"none",borderRadius:7,background:"#0073ea",color:"#fff",padding:"5px 9px",fontSize:11,fontWeight:800,cursor:"pointer"}}>Assign</button>}</div>})}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>🧠 Smart Schedule Suggestion</b><div style={{fontSize:12,color:sub,marginTop:4}}>Risky schedule suggestions.</div>{risky.length===0?<p style={{fontSize:12,color:sub}}>No risky schedules.</p>:risky.map(r=><div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`,borderLeft:`4px solid ${r.a.riskColor}`}}><b style={{fontSize:12,color:text}}>{r.item.name}</b><span style={{float:"right",fontSize:10,color:r.a.riskColor,fontWeight:900}}>{r.a.risk}</span><div style={{fontSize:11,color:sub}}>Start: {formatDateOnly(r.a.suggestedStart)||"—"} • PM: {formatDateOnly(r.a.suggestedPmReview)||"—"} • Final: {formatDateOnly(r.a.finalDeadline)||"—"}</div><div style={{fontSize:10,color:sub}}>{r.a.reason}</div></div>)}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>✅ PM Approval Flow</b><div style={{fontSize:12,color:sub,marginTop:4}}>Quick PM actions.</div>{pm.length===0?<p style={{fontSize:12,color:sub}}>No PM queue.</p>:pm.map(r=><div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`}}><div style={{fontSize:12,fontWeight:800,color:text}}>{r.item.name}</div><div style={{display:"flex",gap:6,marginTop:7,flexWrap:"wrap"}}><button onClick={()=>upd(r,{status:"Ready for PM Review",pmReviewDate:new Date().toISOString().slice(0,10)})}>Submit</button><button onClick={()=>upd(r,{status:"Approved"})}>Approve</button><button onClick={()=>upd(r,{status:"Need Revision"})}>Revision</button><button onClick={()=>upd(r,{status:"Stuck"})}>Reject</button></div></div>)}</div></div></div>}
 
+
+function GanttWhatIfPanel({boards}:any){
+  const {dark}=useDark();
+  const card=dark?"#16213e":"#fff", text=dark?"#e0e0f0":"#323338", sub=dark?"#8888aa":"#676879", bdr=dark?"#2a2a4a":"#eef1f7";
+  const [boardId,setBoardId]=useState(asArray(boards)[0]?.id);
+  const [deadlineShift,setDeadlineShift]=useState(0);
+  const [capacityScale,setCapacityScale]=useState(100);
+  const board=asArray(boards).find(b=>b.id===boardId)||asArray(boards)[0];
+  useEffect(()=>{if(board&&!asArray(boards).some(b=>b.id===boardId))setBoardId(board.id)},[boards,boardId]);
+  if(!board)return null;
+  const records=asArray(board.groups).flatMap(g=>asArray(g.items).map(i=>({group:g,item:i,range:getTaskRange(i)}))).filter(r=>r.range).slice(0,18);
+  const start=records.length?new Date(Math.min(...records.map(r=>r.range.start.getTime()))):new Date();
+  const end=records.length?new Date(Math.max(...records.map(r=>r.range.end.getTime()))):addDays(start,30);
+  const total=Math.max(1,diffDays(start,end)+1);
+  const open=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>!["Done","Submitted","Approved"].includes(i.status));
+  const sim=open.map(i=>{const d=parseDateOnly(i.due);const due=d?formatDateOnly(addDays(d,Number(deadlineShift)||0)):i.due;const cap=Math.max(1,getOwnerCapacity(board,i.owner,6)*(Number(capacityScale)||100)/100);return getPlanningAnalysis({...i,due},cap)});
+  const risk=sim.filter(a=>["At Risk","Invalid","Tight Review","Tight","Missing deadline"].includes(a.risk)).length;
+  const delay=Math.max(0,...sim.map((a:any)=>a.slackDays!=null?Math.max(0,-a.slackDays):0));
+  const level=risk>3||delay>3?"High Risk":risk>0?"Medium Risk":"Good";
+  return <div style={{display:"grid",gridTemplateColumns:"minmax(360px,1.5fr) minmax(260px,.8fr)",gap:18,marginBottom:18}}>
+    <div style={{background:card,border:`1px solid ${bdr}`,borderRadius:12,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.06)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}><div><div style={{fontSize:14,fontWeight:900,color:text}}>🗓️ Gantt / Timeline</div><div style={{fontSize:12,color:sub,marginTop:3}}>Read-only view from task start and due dates.</div></div><select value={board.id} onChange={e=>setBoardId(Number(e.target.value))} style={{border:`1px solid ${bdr}`,borderRadius:8,padding:"6px 9px",fontSize:12,background:card,color:text}}>{asArray(boards).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+      <div style={{marginTop:14,display:"grid",gap:9}}>{records.length===0?<div style={{fontSize:12,color:sub}}>Add Start Date and Due Date first.</div>:records.map(r=>{const left=Math.max(0,diffDays(start,r.range.start))/total*100;const width=Math.max(3,(diffDays(r.range.start,r.range.end)+1)/total*100);const color=STATUS_OPTIONS.find(x=>x.label===r.item.status)?.color||r.group.color||"#579bfc";return <div key={`${r.group.id}-${r.item.id}`} style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:10,alignItems:"center"}}><div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,color:text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.item.name}</div><div style={{fontSize:10,color:sub}}>{r.item.owner||"No owner"}</div></div><div style={{height:20,background:dark?"#101828":"#f0f2f8",borderRadius:999,position:"relative"}}><div style={{position:"absolute",left:`${left}%`,width:`${Math.min(width,100-left)}%`,top:3,height:14,borderRadius:999,background:color}} /></div></div>})}</div>
+    </div>
+    <div style={{background:card,border:`1px solid ${bdr}`,borderRadius:12,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.06)"}}>
+      <div style={{fontSize:14,fontWeight:900,color:text}}>🧪 What-if Simulator</div><div style={{fontSize:12,color:sub,marginTop:3}}>Try deadline and capacity without saving.</div>
+      <label style={{display:"block",marginTop:12,fontSize:11,color:sub}}>Deadline shift days</label><input type="number" value={deadlineShift} onChange={e=>setDeadlineShift(Number(e.target.value)||0)} style={{width:"100%",padding:8,border:`1px solid ${bdr}`,borderRadius:8,background:card,color:text}} />
+      <label style={{display:"block",marginTop:10,fontSize:11,color:sub}}>Capacity scale %</label><input type="number" value={capacityScale} onChange={e=>setCapacityScale(Number(e.target.value)||100)} style={{width:"100%",padding:8,border:`1px solid ${bdr}`,borderRadius:8,background:card,color:text}} />
+      <div style={{marginTop:14,padding:12,borderRadius:10,background:level==="Good"?"#eafff3":level==="Medium Risk"?"#fff8e6":"#fdeef1"}}><div style={{fontSize:18,fontWeight:900,color:level==="Good"?"#00875a":level==="Medium Risk"?"#d4900a":"#e2445c"}}>{level}</div><div style={{fontSize:12,color:"#676879",marginTop:6}}>Risk tasks: {risk} • Est. delay: {delay} day(s)</div><div style={{fontSize:12,color:"#323338",marginTop:6,fontWeight:800}}>{level==="Good"?"Plan looks acceptable.":"Increase capacity or move deadline."}</div></div>
+    </div>
+  </div>;
+}
+
 // SVG Donut chart
 function DonutChart({ slices, size = 120 }: { slices: { value: number; color: string; label: string }[]; size?: number }) {
   const total = slices.reduce((s, x) => s + x.value, 0);
@@ -2119,6 +2325,7 @@ function Dashboard({ boards, onPatchBoard }: any) {
     <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: bg }}>
       <h2 style={{ margin: "0 0 24px", fontSize: 20, fontWeight: 800, color: text }}>📊 Dashboard</h2>
       <PlanningSuitePanel boards={boards} onPatchBoard={onPatchBoard} />
+      <GanttWhatIfPanel boards={boards} />
 
       {/* KPI cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(148px,1fr))", gap: 14, marginBottom: 28 }}>
@@ -2790,6 +2997,9 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
       if (e.key === "k" || e.key === "K") { setView("kanban"); return; }
       if (e.key === "c" || e.key === "C") { setView("calendar"); return; }
       if (e.key === "w" || e.key === "W") { setView("workload"); return; }
+      if (e.key === "m" || e.key === "M") { setView("mywork"); return; }
+      if (e.key === "x" || e.key === "X") { setView("critical"); return; }
+      if (e.key === "p" || e.key === "P") { setView("planning"); return; }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -2987,14 +3197,14 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
         {canEditBoard
           ? <InlineEdit value={board.name} onChange={v => updBoard({ name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338" }} />
           : <span style={{ fontSize: 18, fontWeight: 700, color: "#323338" }}>{board.name}</span>}
-        <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
+        <div style={{ display: "flex", gap: 6, marginLeft: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ background: "#e6f9f1", color: "#00c875", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{done} done</span>
           {stuck > 0 && <span style={{ background: "#fde8ec", color: "#e2445c", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{stuck} stuck</span>}
           <span style={{ background: "#f0f4ff", color: "#676879", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{allItems.length} total</span>
         </div>
         {/* View toggle */}
         <div style={{ display: "flex", gap: 4, marginLeft: "auto", background: "#f6f7fb", borderRadius: 8, padding: 3 }}>
-          {[["table","☰ Table"],["kanban","⬡ Kanban"],["calendar","🗓 Calendar"],["workload","👥 Workload"],["planning","🧠 Planning"]].map(([v,label]) => (
+          {[["table","☰ Table"],["kanban","⬡ Kanban"],["calendar","🗓 Calendar"],["mywork","👤 My Work"],["workload","👥 Workload"],["critical","🧭 Critical"],["planning","🧠 Planning"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{ background: view === v ? "#fff" : "none", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: view === v ? "#0073ea" : "#676879", cursor: "pointer", boxShadow: view === v ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{label}</button>
           ))}
         </div>
@@ -3007,7 +3217,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
 
       {/* Keyboard shortcut hint */}
       <div style={{ background: "#f7f8fc", borderBottom: "1px solid #f0f0f0", padding: "4px 28px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Kanban"],["C","Calendar"],["W","Workload"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
+        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Kanban"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
           <span key={key} style={{ fontSize: 11, color: "#98a1b3", display: "flex", alignItems: "center", gap: 4 }}>
             <kbd style={{ background: "#fff", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", color: "#323338", boxShadow: "0 1px 2px rgba(0,0,0,.06)" }}>{key}</kbd>
             {label}
@@ -3066,8 +3276,12 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
         <KanbanView board={filteredBoard} onUpdate={updatedVisibleBoard => mergeFilteredBoardUpdate(filteredBoard, updatedVisibleBoard)} onCelebrate={onCelebrate} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
       ) : view === "calendar" ? (
         <CalendarTimelineView board={filteredBoard} onOpen={handleOpenItem} />
+      ) : view === "mywork" ? (
+        <MyWorkView board={board} currentUserEmail={currentUserEmail} currentUserName={currentUserName} onOpen={handleOpenItem} />
       ) : view === "workload" ? (
         <TeamScheduleView board={filteredBoard} onOpen={handleOpenItem} />
+      ) : view === "critical" ? (
+        <CriticalPathView board={board} onOpen={handleOpenItem} />
       ) : view === "planning" ? (
         <PMPlanningView board={filteredBoard} onOpen={handleOpenItem} />
       ) : (
@@ -3394,6 +3608,11 @@ function GuestPlanningPreview({ onBackToLogin }: { onBackToLogin: () => void }) 
   );
 }
 
+function WorkspaceBadge({ workspaceId }: { workspaceId: string }) {
+  if (!workspaceId || workspaceId === DEFAULT_WORKSPACE_ID) return null;
+  return <span style={{ background: "#eef4ff", color: "#0073ea", borderRadius: 999, padding: "2px 9px", fontSize: 11, fontWeight: 800 }}>Workspace: {workspaceId}</span>;
+}
+
 function AppContent() {
   useEffect(() => { document.title = "HOLIFRIDAY"; }, []);
   const [guestPlanningMode, setGuestPlanningMode] = useState(() => {
@@ -3421,7 +3640,8 @@ function AppContent() {
     // Set a 5s max wait so auth check never blocks forever
     return false;
   });
-  const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid);
+  const [workspaceId] = useState(() => getWorkspaceIdFromLocation());
+  const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid, workspaceId);
   const [activeId, setActiveId] = useState(INITIAL_BOARDS[0].id);
   const [activeView, setActiveView] = useState("boards"); // boards | dashboard
   const [inviteToken, setInviteToken] = useState(() => {
@@ -3496,7 +3716,7 @@ function AppContent() {
     }
 
     try {
-      const snap = await get(dbRef(firebaseDb, SHARED_BOARDS_PATH));
+      const snap = await get(dbRef(firebaseDb, getBoardsPath(workspaceId)));
       const serverBoards = normalizeBoards(snap.val(), boardsRef.current);
       const serverBoard = asArray(serverBoards).find(b => b.id === boardId);
 
