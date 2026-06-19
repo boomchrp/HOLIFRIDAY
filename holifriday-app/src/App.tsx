@@ -1698,7 +1698,7 @@ function CalendarTimelineView({ board, onOpen }) {
 
 function TeamScheduleView({ board, onOpen }: any) {
   const [days, setDays] = useState(30);
-  const [fallbackCapacity, setFallbackCapacity] = useState(6);
+  const [capacity, setCapacity] = useState(6);
   const [hideDone, setHideDone] = useState(true);
   const [selectedOwner, setSelectedOwner] = useState("All");
 
