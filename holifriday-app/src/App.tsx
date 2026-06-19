@@ -2076,7 +2076,7 @@ function GanttWhatIfPanel({boards}:any){
   const open=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>!["Done","Submitted","Approved"].includes(i.status));
   const sim=open.map(i=>{const d=parseDateOnly(i.due);const due=d?formatDateOnly(addDays(d,Number(deadlineShift)||0)):i.due;const cap=Math.max(1,getOwnerCapacity(board,i.owner,6)*(Number(capacityScale)||100)/100);return getPlanningAnalysis({...i,due},cap)});
   const risk=sim.filter(a=>["At Risk","Invalid","Tight Review","Tight","Missing deadline"].includes(a.risk)).length;
-  const delay=Math.max(0,...sim.map(a=>(a.totalNeededDays&&a.daysAvailable)?Math.max(0,a.totalNeededDays-a.daysAvailable):0));
+  const delay=Math.max(0,...sim.map((a:any)=>((a.totalNeededDays||0)&&(a.daysAvailable||0))?Math.max(0,(a.totalNeededDays||0)-(a.daysAvailable||0)):0));
   const level=risk>3||delay>3?"High Risk":risk>0?"Medium Risk":"Good";
   return <div style={{display:"grid",gridTemplateColumns:"minmax(360px,1.5fr) minmax(260px,.8fr)",gap:18,marginBottom:18}}>
     <div style={{background:card,border:`1px solid ${bdr}`,borderRadius:12,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.06)"}}>
