@@ -385,7 +385,9 @@ function detectBoardVersionConflicts(prevBoard, nextBoard, serverBoard) {
     const baseVersion = Number.isFinite(Number(prevItem?.version)) && Number(prevItem?.version) > 0 ? Number(prevItem.version) : 1;
     const serverVersion = Number.isFinite(Number(serverItem?.version)) && Number(serverItem?.version) > 0 ? Number(serverItem.version) : 1;
 
-    if (serverVersion !== baseVersion) {
+    // Conflict only when server moved ahead of the local base.
+    // If server is behind, it's a stale read during propagation and should not block.
+    if (serverVersion > baseVersion) {
       conflicts.push({
         key,
         itemId: nextItem.id,
