@@ -43,6 +43,19 @@ const PRIORITY_OPTIONS = [
 ];
 const SIGNUPS_TABLE = "user_signups";
 const SHARED_BOARDS_PATH = "holifriday/sharedBoards/main";
+const DEFAULT_WORKSPACE_ID = "main";
+function normalizeWorkspaceId(value) {
+  const raw = asText(value, DEFAULT_WORKSPACE_ID).trim().toLowerCase();
+  return raw.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || DEFAULT_WORKSPACE_ID;
+}
+function getWorkspaceIdFromLocation() {
+  try { return normalizeWorkspaceId(new URLSearchParams(window.location.search).get("workspace") || DEFAULT_WORKSPACE_ID); }
+  catch { return DEFAULT_WORKSPACE_ID; }
+}
+function getBoardsPath(workspaceId = DEFAULT_WORKSPACE_ID) {
+  const id = normalizeWorkspaceId(workspaceId);
+  return id === DEFAULT_WORKSPACE_ID ? SHARED_BOARDS_PATH : `holifriday/workspaces/${id}/boards`;
+}
 
 const INITIAL_BOARDS = [
   {
@@ -284,6 +297,10 @@ function normalizeTask(task, index) {
     priority: validPriority,
     start: asText(task?.start, ""),
     due: asText(task?.due, ""),
+    pmReviewDate: asText(task?.pmReviewDate, ""),
+    effortHours: numberOrDefault(task?.effortHours, 0),
+    reviewBufferDays: numberOrDefault(task?.reviewBufferDays, 1),
+    revisionBufferDays: numberOrDefault(task?.revisionBufferDays, 1),
     tags: asArray(task?.tags).filter(t => typeof t === "string"),
     comments: asArray(task?.comments).map((c, i) => ({
       id: c?.id ?? uid(),
@@ -635,8 +652,8 @@ function useLocalStorage(key, init) {
   return [val, setVal];
 }
 
-function useSyncedBoards(key, init, uid) {
-  const dbPath = firebaseDb ? SHARED_BOARDS_PATH : null;
+function useSyncedBoards(key, init, uid, workspaceId = DEFAULT_WORKSPACE_ID) {
+  const dbPath = firebaseDb ? getBoardsPath(workspaceId) : null;
   const [val, setVal] = useState<typeof init | null>(null); // null = not yet loaded from server
   const [loaded, setLoaded] = useState(false);
   const [loadedUid, setLoadedUid] = useState<string | undefined>(undefined);
@@ -1718,7 +1735,7 @@ function TeamScheduleView({ board, onOpen }: any) {
         if (!range) return null;
         const duration = diffDays(range.start, range.end) + 1;
         const effort = getEffortHours(item);
-        return { ...item, _start: range.start, _end: range.end, _duration: duration, _effortHours: effort, _hoursPerDay: duration > 0 ? (effort > 0 ? effort / duration : 1) : 0, _analysis: getPlanningAnalysis(item, capacity) };
+        return { ...item, _start: range.start, _end: range.end, _duration: duration, _effortHours: effort, _hoursPerDay: duration > 0 ? (effort > 0 ? effort / duration : 1) : 0, _ownerCapacity: getOwnerCapacity(board, item.owner, capacity), _analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, capacity)) };
       })
       .filter(Boolean)
       .filter(item => !hideDone || item.status !== "Done");
@@ -1766,7 +1783,8 @@ function TeamScheduleView({ board, onOpen }: any) {
     const list = tasksByOwner.get(owner) || [];
     const byDate = workload.get(owner) || new Map();
     const loadHours = Array.from(byDate.values()).reduce((sum, v) => sum + v.reduce((s, t) => s + (t._hoursPerDay || 0), 0), 0);
-    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > capacity).length;
+    const ownerCapacity = getOwnerCapacity(board, owner, capacity);
+    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > ownerCapacity).length;
     const overdue = list.filter(t => isOverdue(t.due) && t.status !== "Done").length;
     const dueSoon = list.filter(t => isDueSoon(t.due) && t.status !== "Done").length;
     return { owner, taskCount: list.length, loadHours, overloadDays, overdue, dueSoon };
@@ -1857,8 +1875,9 @@ function TeamScheduleView({ board, onOpen }: any) {
                       const key = day.toISOString().slice(0, 10);
                       const list = byDate.get(key) || [];
                       const loadHours = list.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0);
-                      const overloaded = loadHours > capacity;
-                      const intensity = Math.min(loadHours / Math.max(maxLoad, capacity), 1);
+                      const ownerCapacity = getOwnerCapacity(board, owner, capacity);
+                      const overloaded = loadHours > ownerCapacity;
+                      const intensity = Math.min(loadHours / Math.max(maxLoad, ownerCapacity), 1);
                       return <div key={key} title={list.length ? `${Math.round(loadHours * 10) / 10}h • ${list.length} task(s)` : ""} style={{ borderLeft: "1px solid #f7f8fc", background: overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.04 + intensity * 0.12})` : "#fff" }}>{overloaded && <div style={{ height: 4, background: "#fdab3d" }} />}</div>;
                     })}
                     {(tasksByOwner.get(owner) || []).map((task, idx) => {
@@ -2072,7 +2091,7 @@ function GanttWhatIfPanel({boards}:any){
   const open=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>!["Done","Submitted","Approved"].includes(i.status));
   const sim=open.map(i=>{const d=parseDateOnly(i.due);const due=d?formatDateOnly(addDays(d,Number(deadlineShift)||0)):i.due;const cap=Math.max(1,getOwnerCapacity(board,i.owner,6)*(Number(capacityScale)||100)/100);return getPlanningAnalysis({...i,due},cap)});
   const risk=sim.filter(a=>["At Risk","Invalid","Tight Review","Tight","Missing deadline"].includes(a.risk)).length;
-  const delay=Math.max(0,...sim.map((a:any)=>((a.totalNeededDays||0)&&(a.daysAvailable||0))?Math.max(0,(a.totalNeededDays||0)-(a.daysAvailable||0)):0));
+  const delay=Math.max(0,...sim.map((a:any)=>a.slackDays!=null?Math.max(0,-a.slackDays):0));
   const level=risk>3||delay>3?"High Risk":risk>0?"Medium Risk":"Good";
   return <div style={{display:"grid",gridTemplateColumns:"minmax(360px,1.5fr) minmax(260px,.8fr)",gap:18,marginBottom:18}}>
     <div style={{background:card,border:`1px solid ${bdr}`,borderRadius:12,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.06)"}}>
@@ -3017,7 +3036,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
         {canEditBoard
           ? <InlineEdit value={board.name} onChange={v => updBoard({ name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338" }} />
           : <span style={{ fontSize: 18, fontWeight: 700, color: "#323338" }}>{board.name}</span>}
-        <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
+        <div style={{ display: "flex", gap: 6, marginLeft: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ background: "#e6f9f1", color: "#00c875", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{done} done</span>
           {stuck > 0 && <span style={{ background: "#fde8ec", color: "#e2445c", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{stuck} stuck</span>}
           <span style={{ background: "#f0f4ff", color: "#676879", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{allItems.length} total</span>
@@ -3424,6 +3443,11 @@ function GuestPlanningPreview({ onBackToLogin }: { onBackToLogin: () => void }) 
   );
 }
 
+function WorkspaceBadge({ workspaceId }: { workspaceId: string }) {
+  if (!workspaceId || workspaceId === DEFAULT_WORKSPACE_ID) return null;
+  return <span style={{ background: "#eef4ff", color: "#0073ea", borderRadius: 999, padding: "2px 9px", fontSize: 11, fontWeight: 800 }}>Workspace: {workspaceId}</span>;
+}
+
 function AppContent() {
   useEffect(() => { document.title = "HOLIFRIDAY"; }, []);
   const [guestPlanningMode, setGuestPlanningMode] = useState(() => {
@@ -3451,7 +3475,8 @@ function AppContent() {
     // Set a 5s max wait so auth check never blocks forever
     return false;
   });
-  const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid);
+  const [workspaceId] = useState(() => getWorkspaceIdFromLocation());
+  const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid, workspaceId);
   const [activeId, setActiveId] = useState(INITIAL_BOARDS[0].id);
   const [activeView, setActiveView] = useState("boards"); // boards | dashboard
   const [inviteToken, setInviteToken] = useState(() => {
@@ -3526,7 +3551,7 @@ function AppContent() {
     }
 
     try {
-      const snap = await get(dbRef(firebaseDb, SHARED_BOARDS_PATH));
+      const snap = await get(dbRef(firebaseDb, getBoardsPath(workspaceId)));
       const serverBoards = normalizeBoards(snap.val(), boardsRef.current);
       const serverBoard = asArray(serverBoards).find(b => b.id === boardId);
 
