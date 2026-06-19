@@ -1419,7 +1419,7 @@ function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canE
       return;
     }
     const nextPatch = patch?.status && patch.status !== item.status
-      ? { ...patch, approvalHistory: [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, currentUserName || "You")] }
+      ? { ...patch, approvalHistory: [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, "You")] }
       : patch;
     onUpdate({ ...item, ...nextPatch });
   }
@@ -2783,7 +2783,10 @@ function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen, ow
       const rect = statusRef.current?.getBoundingClientRect();
       onCelebrate(item.name, rect ? rect.left + rect.width / 2 : undefined);
     }
-    onUpdate({ ...item, ...patch });
+    const nextPatch = patch?.status && patch.status !== item.status
+      ? { ...patch, approvalHistory: [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, "You")] }
+      : patch;
+    onUpdate({ ...item, ...nextPatch });
   }
 
   return (
