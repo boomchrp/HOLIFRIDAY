@@ -1,10 +1,21 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { Component, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { getSupabase, hasSupabaseConfig } from "./lib/supabase";
+import { firebaseDb, firebaseAuth, firebaseDebugInfo } from "./lib/firebase";
+import { ref as dbRef, onValue, set } from "firebase/database";
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+} from "firebase/auth";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const GROUP_COLORS = ["#0073ea","#e2445c","#00c875","#fdab3d","#a25ddc","#ff642e","#579bfc","#bb3354","#9d50dd","#ffcb00"];
 const CONFETTI_COLORS = ["#e2445c","#00c875","#fdab3d","#0073ea","#a25ddc","#ffcb00","#ff642e","#579bfc"];
-const OWNER_POOL = ["Alice","Bob","Carol","Dave","Eve","Frank"];
+const OWNER_POOL: string[] = [];
 const TAG_OPTIONS = [
   { label: "Design",    color: "#a25ddc" },
   { label: "Dev",       color: "#0073ea" },
@@ -14,10 +25,15 @@ const TAG_OPTIONS = [
   { label: "Review",    color: "#00c875" },
 ];
 const STATUS_OPTIONS = [
-  { label: "Done",           color: "#00c875" },
-  { label: "Working on it",  color: "#fdab3d" },
-  { label: "Stuck",          color: "#e2445c" },
-  { label: "Not Started",    color: "#c4c4c4" },
+  { label: "Done",                color: "#00c875" },
+  { label: "Submitted",           color: "#00a878" },
+  { label: "Approved",            color: "#20b26b" },
+  { label: "Ready for PM Review", color: "#579bfc" },
+  { label: "PM Reviewing",        color: "#a25ddc" },
+  { label: "Need Revision",       color: "#ff642e" },
+  { label: "Working on it",       color: "#fdab3d" },
+  { label: "Stuck",               color: "#e2445c" },
+  { label: "Not Started",         color: "#c4c4c4" },
 ];
 const PRIORITY_OPTIONS = [
   { label: "Critical", color: "#e2445c" },
@@ -25,6 +41,7 @@ const PRIORITY_OPTIONS = [
   { label: "Medium",   color: "#579bfc" },
   { label: "Low",      color: "#c4c4c4" },
 ];
+const SIGNUPS_TABLE = "user_signups";
 
 const INITIAL_BOARDS = [
   {
@@ -33,17 +50,17 @@ const INITIAL_BOARDS = [
       {
         id: 10, name: "Planning", color: "#579bfc",
         items: [
-          { id: 100, name: "Market Research",      owner: "Alice", status: "Done",          priority: "High",     due: "2026-06-10", tags: ["Research"], comments: [], subtasks: [] },
-          { id: 101, name: "Competitive Analysis", owner: "Bob",   status: "Working on it", priority: "Medium",   due: "2026-06-18", tags: ["Research","Marketing"], comments: [], subtasks: [] },
-          { id: 102, name: "Define MVP scope",     owner: "Carol", status: "Not Started",   priority: "Critical", due: "2026-06-22", tags: ["Dev"], comments: [], subtasks: [] },
+          { id: 100, name: "Market Research",      owner: "", status: "Done",          priority: "High",     due: "2026-06-10", tags: ["Research"], comments: [], subtasks: [] },
+          { id: 101, name: "Competitive Analysis", owner: "", status: "Working on it", priority: "Medium",   due: "2026-06-18", tags: ["Research","Marketing"], comments: [], subtasks: [] },
+          { id: 102, name: "Define MVP scope",     owner: "", status: "Not Started",   priority: "Critical", due: "2026-06-22", tags: ["Dev"], comments: [], subtasks: [] },
         ],
       },
       {
         id: 11, name: "Development", color: "#00c875",
         items: [
-          { id: 103, name: "Design Mockups",  owner: "Carol", status: "Stuck",         priority: "Critical", due: "2026-06-20", tags: ["Design"], comments: [], subtasks: [{ id: 1031, name: "Wireframes", done: true }, { id: 1032, name: "Hi-fi mockup", done: false }] },
-          { id: 104, name: "Backend API",     owner: "Dave",  status: "Not Started",   priority: "High",     due: "2026-06-30", tags: ["Dev"], comments: [], subtasks: [] },
-          { id: 105, name: "Frontend Build",  owner: "Eve",   status: "Working on it", priority: "High",     due: "2026-07-05", tags: ["Dev","Design"], comments: [], subtasks: [] },
+          { id: 103, name: "Design Mockups",  owner: "", status: "Stuck",         priority: "Critical", due: "2026-06-20", tags: ["Design"], comments: [], subtasks: [{ id: 1031, name: "Wireframes", done: true }, { id: 1032, name: "Hi-fi mockup", done: false }] },
+          { id: 104, name: "Backend API",     owner: "", status: "Not Started",   priority: "High",     due: "2026-06-30", tags: ["Dev"], comments: [], subtasks: [] },
+          { id: 105, name: "Frontend Build",  owner: "", status: "Working on it", priority: "High",     due: "2026-07-05", tags: ["Dev","Design"], comments: [], subtasks: [] },
         ],
       },
     ],
@@ -54,8 +71,8 @@ const INITIAL_BOARDS = [
       {
         id: 20, name: "Campaigns", color: "#fdab3d",
         items: [
-          { id: 200, name: "Email drip series",    owner: "Frank", status: "Working on it", priority: "High",   due: "2026-06-25", tags: ["Marketing"], comments: [], subtasks: [] },
-          { id: 201, name: "Social media calendar",owner: "Alice", status: "Done",          priority: "Medium", due: "2026-06-15", tags: ["Marketing"], comments: [], subtasks: [] },
+          { id: 200, name: "Email drip series",    owner: "", status: "Working on it", priority: "High",   due: "2026-06-25", tags: ["Marketing"], comments: [], subtasks: [] },
+          { id: 201, name: "Social media calendar",owner: "", status: "Done",          priority: "Medium", due: "2026-06-15", tags: ["Marketing"], comments: [], subtasks: [] },
         ],
       },
     ],
@@ -66,6 +83,288 @@ const INITIAL_BOARDS = [
 
 function uid() { return Date.now() + Math.random(); }
 
+function asArray(value, fallback = []) {
+  if (Array.isArray(value)) return value;
+  // Firebase RTDB stores arrays as objects with numeric keys {"0":…,"1":…}
+  if (value !== null && value !== undefined && typeof value === "object") return Object.values(value);
+  return fallback;
+}
+
+function asText(value, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function normalizeEmail(value) {
+  return asText(value).trim().toLowerCase();
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set(asArray(values).filter(v => typeof v === "string" && v.trim().length > 0)));
+}
+
+const LEGACY_OWNER_NAMES = new Set(["unassigned", "bob", "carol"]);
+
+function normalizeOwner(value) {
+  const owner = asText(value, "").trim();
+  if (!owner) return "No owner";
+  if (LEGACY_OWNER_NAMES.has(owner.toLowerCase())) return "No owner";
+  return owner;
+}
+
+function createInviteToken() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeRole(value) {
+  return value === "viewer" ? "viewer" : "editor";
+}
+
+function actorLabel(name, email) {
+  const n = asText(name, "").trim();
+  const e = normalizeEmail(email);
+  return n || e || "Unknown user";
+}
+
+function createActivityLog({ actorName, actorEmail, boardId, groupId = null, itemId = null, itemName = "", action, field = "", oldValue = "", newValue = "" }) {
+  return {
+    id: uid(),
+    boardId,
+    groupId,
+    itemId,
+    itemName: asText(itemName),
+    actorName: asText(actorName, "Unknown user"),
+    actorEmail: normalizeEmail(actorEmail),
+    action: asText(action, "updated"),
+    field: asText(field),
+    oldValue: typeof oldValue === "string" ? oldValue : JSON.stringify(oldValue ?? ""),
+    newValue: typeof newValue === "string" ? newValue : JSON.stringify(newValue ?? ""),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function shortValue(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value === undefined || value === null || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function sameJson(a, b) {
+  try { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); }
+  catch { return a === b; }
+}
+
+function trimActivityLogs(logs, limit = 250) {
+  return asArray(logs).slice(-limit);
+}
+
+function makeBoardChangeLogs(prevBoard, nextBoard, actorName, actorEmail) {
+  const logs = [];
+  const prevGroups = new Map(asArray(prevBoard?.groups).map(g => [g.id, g]));
+  const nextGroups = new Map(asArray(nextBoard?.groups).map(g => [g.id, g]));
+
+  for (const [groupId, nextGroup] of nextGroups) {
+    const prevGroup = prevGroups.get(groupId);
+    if (!prevGroup) {
+      logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, action: "group_created", itemName: nextGroup.name, newValue: nextGroup.name }));
+      continue;
+    }
+    if (prevGroup.name !== nextGroup.name) {
+      logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, action: "group_renamed", field: "group.name", oldValue: prevGroup.name, newValue: nextGroup.name }));
+    }
+
+    const prevItems = new Map(asArray(prevGroup.items).map(i => [i.id, i]));
+    const nextItems = new Map(asArray(nextGroup.items).map(i => [i.id, i]));
+
+    for (const [itemId, nextItem] of nextItems) {
+      const prevItem = prevItems.get(itemId);
+      if (!prevItem) {
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: "task_created", newValue: nextItem.name }));
+        continue;
+      }
+
+      const simpleFields = ["name", "owner", "status", "priority", "start", "due", "pmReviewDate", "effortHours", "reviewBufferDays", "revisionBufferDays"];
+      for (const field of simpleFields) {
+        if ((prevItem[field] ?? "") !== (nextItem[field] ?? "")) {
+          logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: `${field}_changed`, field, oldValue: shortValue(prevItem[field]), newValue: shortValue(nextItem[field]) }));
+        }
+      }
+
+      if (!sameJson(prevItem.tags, nextItem.tags)) {
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: "tags_changed", field: "tags", oldValue: shortValue(prevItem.tags), newValue: shortValue(nextItem.tags) }));
+      }
+      if (!sameJson(prevItem.subtasks, nextItem.subtasks)) {
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: "subtasks_changed", field: "subtasks", oldValue: `${asArray(prevItem.subtasks).filter(s => s.done).length}/${asArray(prevItem.subtasks).length}`, newValue: `${asArray(nextItem.subtasks).filter(s => s.done).length}/${asArray(nextItem.subtasks).length}` }));
+      }
+      if (asArray(nextItem.comments).length > asArray(prevItem.comments).length) {
+        const added = asArray(nextItem.comments).slice(asArray(prevItem.comments).length).map(c => c?.text).filter(Boolean).join(" | ");
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: "comment_added", field: "comments", newValue: added.slice(0, 180) }));
+      } else if (!sameJson(prevItem.comments, nextItem.comments)) {
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: nextItem.name, action: "comments_changed", field: "comments" }));
+      }
+    }
+
+    for (const [itemId, prevItem] of prevItems) {
+      if (!nextItems.has(itemId)) {
+        logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, itemId, itemName: prevItem.name, action: "task_deleted", oldValue: prevItem.name }));
+      }
+    }
+  }
+
+  for (const [groupId, prevGroup] of prevGroups) {
+    if (!nextGroups.has(groupId)) {
+      logs.push(createActivityLog({ actorName, actorEmail, boardId: nextBoard.id, groupId, action: "group_deleted", oldValue: prevGroup.name }));
+    }
+  }
+
+  return logs.slice(0, 20);
+}
+
+function memberRoleKey(email) {
+  const normalized = normalizeEmail(email);
+  try {
+    return btoa(unescape(encodeURIComponent(normalized)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  } catch {
+    return normalized.replace(/[^a-z0-9]/g, "_");
+  }
+}
+
+function memberRoleEmail(key) {
+  try {
+    const normalizedKey = asText(key);
+    const base64 = normalizedKey.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "===".slice((base64.length + 3) % 4);
+    return normalizeEmail(decodeURIComponent(escape(atob(padded))));
+  } catch {
+    return normalizeEmail(key);
+  }
+}
+
+function memberLabel(value) {
+  const email = normalizeEmail(value);
+  const namePart = email.split("@")[0] || "member";
+  return namePart.replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function resolveInviteTarget(boards, token) {
+  if (!token) return null;
+  for (const board of asArray(boards)) {
+    for (const group of asArray(board?.groups)) {
+      const invite = asArray(group?.invites).find(i => i?.token === token);
+      if (invite) {
+        return {
+          boardId: board.id,
+          boardName: board.name,
+          groupId: group.id,
+          groupName: group.name,
+          role: normalizeRole(invite.role),
+          token,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeTask(task, index) {
+  const validStatus = STATUS_OPTIONS.some(s => s.label === task?.status) ? task.status : "Not Started";
+  const validPriority = PRIORITY_OPTIONS.some(p => p.label === task?.priority) ? task.priority : "Medium";
+
+  return {
+    id: task?.id ?? uid(),
+    name: asText(task?.name, `Task ${index + 1}`),
+    owner: normalizeOwner(task?.owner),
+    status: validStatus,
+    priority: validPriority,
+    start: asText(task?.start, ""),
+    due: asText(task?.due, ""),
+    tags: asArray(task?.tags).filter(t => typeof t === "string"),
+    comments: asArray(task?.comments).map((c, i) => ({
+      id: c?.id ?? uid(),
+      author: asText(c?.author, "Unknown"),
+      text: asText(c?.text, ""),
+      time: asText(c?.time, ""),
+      _sort: i,
+    })).map(({ _sort, ...rest }) => rest),
+    subtasks: asArray(task?.subtasks).map((s, i) => ({
+      id: s?.id ?? uid(),
+      name: asText(s?.name, `Subtask ${i + 1}`),
+      done: !!s?.done,
+    })),
+  };
+}
+
+function normalizeGroup(group, index) {
+  const memberRolesRaw = group?.memberRoles && typeof group.memberRoles === "object" ? group.memberRoles : {};
+  const memberRoles = Object.fromEntries(
+    Object.entries(memberRolesRaw)
+      .map(([key, role]) => [memberRoleKey(memberRoleEmail(key)), normalizeRole(role)])
+      .filter(([emailKey]) => emailKey.length > 0),
+  );
+
+  return {
+    id: group?.id ?? uid(),
+    name: asText(group?.name, `Group ${index + 1}`),
+    color: asText(group?.color, GROUP_COLORS[index % GROUP_COLORS.length]),
+    members: uniqueStrings(asArray(group?.members).map(normalizeEmail)),
+    memberRoles,
+    invites: asArray(group?.invites).map(inv => ({
+      token: asText(inv?.token),
+      role: normalizeRole(inv?.role),
+      createdAt: asText(inv?.createdAt, new Date().toISOString()),
+    })).filter(inv => inv.token),
+    items: asArray(group?.items).map((item, itemIndex) => normalizeTask(item, itemIndex)),
+  };
+}
+
+function normalizeBoards(value, fallback = []) {
+  const normalized = asArray(value).map((board, index) => ({
+    id: board?.id ?? uid(),
+    name: asText(board?.name, `Board ${index + 1}`),
+    color: asText(board?.color, GROUP_COLORS[index % GROUP_COLORS.length]),
+    groups: asArray(board?.groups).map((group, groupIndex) => normalizeGroup(group, groupIndex)),
+    activityLogs: trimActivityLogs(asArray(board?.activityLogs).map(log => ({
+      id: log?.id ?? uid(),
+      boardId: log?.boardId ?? board?.id ?? null,
+      groupId: log?.groupId ?? null,
+      itemId: log?.itemId ?? null,
+      itemName: asText(log?.itemName),
+      actorName: asText(log?.actorName, "Unknown user"),
+      actorEmail: normalizeEmail(log?.actorEmail),
+      action: asText(log?.action, "updated"),
+      field: asText(log?.field),
+      oldValue: asText(log?.oldValue),
+      newValue: asText(log?.newValue),
+      createdAt: asText(log?.createdAt, new Date().toISOString()),
+    }))),
+  }));
+
+  if (normalized.length > 0) return normalized;
+  return asArray(fallback).map((board, index) => ({
+    id: board?.id ?? uid(),
+    name: asText(board?.name, `Board ${index + 1}`),
+    color: asText(board?.color, GROUP_COLORS[index % GROUP_COLORS.length]),
+    groups: asArray(board?.groups).map((group, groupIndex) => normalizeGroup(group, groupIndex)),
+    activityLogs: trimActivityLogs(asArray(board?.activityLogs).map(log => ({
+      id: log?.id ?? uid(),
+      boardId: log?.boardId ?? board?.id ?? null,
+      groupId: log?.groupId ?? null,
+      itemId: log?.itemId ?? null,
+      itemName: asText(log?.itemName),
+      actorName: asText(log?.actorName, "Unknown user"),
+      actorEmail: normalizeEmail(log?.actorEmail),
+      action: asText(log?.action, "updated"),
+      field: asText(log?.field),
+      oldValue: asText(log?.oldValue),
+      newValue: asText(log?.newValue),
+      createdAt: asText(log?.createdAt, new Date().toISOString()),
+    }))),
+  }));
+}
+
 function useLocalStorage(key, init) {
   const [val, setVal] = useState(() => {
     try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; }
@@ -73,6 +372,82 @@ function useLocalStorage(key, init) {
   });
   useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }, [key, val]);
   return [val, setVal];
+}
+
+function useSyncedBoards(key, init, uid) {
+  const dbPath = firebaseDb ? "holifriday/sharedBoards/main" : null;
+  const [val, setVal] = useState<typeof init | null>(null); // null = not yet loaded from server
+  const [loaded, setLoaded] = useState(false);
+  const [loadedUid, setLoadedUid] = useState<string | undefined>(undefined);
+  const [loadError, setLoadError] = useState("");
+  const skipWrite = useRef(false);
+
+  useEffect(() => {
+    // No Firebase configured — fall back to the in-memory initial state only
+    if (!firebaseDb || !dbPath) {
+      setVal(normalizeBoards(init, INITIAL_BOARDS));
+      setLoaded(true);
+      setLoadedUid(uid);
+      setLoadError("");
+      return;
+    }
+
+    setLoaded(false); // reset on uid/path change so invite re-waits for real data
+    setLoadError("");
+
+    const boardsRef = dbRef(firebaseDb, dbPath);
+    const unsub = onValue(boardsRef, snap => {
+      const raw = snap.val();
+      // Firebase RTDB stores arrays as objects with numeric keys {"0":…} — normalise both
+      const data = Array.isArray(raw) ? raw
+        : (raw && typeof raw === "object" ? Object.values(raw) : null);
+
+      skipWrite.current = true; // don't echo the data straight back to Firebase
+      if (data && data.length > 0) {
+        const normalizedData = normalizeBoards(data, init);
+        setVal(normalizedData);
+        // Auto-migrate legacy records (old owner names / legacy shape) once loaded.
+        // This keeps old Firebase data aligned with current app expectations.
+        try {
+          if (JSON.stringify(data) !== JSON.stringify(normalizedData)) {
+            set(boardsRef, normalizedData).catch(() => {});
+          }
+        } catch {}
+      } else {
+        // Firebase path is empty — seed it with init data
+        const seed = normalizeBoards(init, INITIAL_BOARDS);
+        setVal(seed);
+        set(boardsRef, seed).catch(() => {});
+      }
+      setLoaded(true);
+      setLoadedUid(uid); // record which uid this data was loaded for
+    }, err => {
+      // Firebase read failed — use the default state instead of stale local data
+      console.warn("Firebase read error:", err?.message);
+      setLoadError(err?.message || "Unknown Firebase read error");
+      skipWrite.current = true;
+      setVal(normalizeBoards(init, INITIAL_BOARDS));
+      setLoaded(true);
+      setLoadedUid(uid);
+    });
+
+    return () => unsub();
+  }, [key, dbPath, uid]); // re-run when auth changes so we always read with correct identity
+
+  // Write-back: ONLY after server data has been received — never before
+  useEffect(() => {
+    if (!loaded || val === null) return;
+    if (skipWrite.current) {
+      skipWrite.current = false;
+      return;
+    }
+    if (firebaseDb && dbPath) {
+      set(dbRef(firebaseDb, dbPath), val).catch(() => {});
+    }
+  }, [key, loaded, val, dbPath]);
+
+  const boards = val ?? normalizeBoards(init, INITIAL_BOARDS);
+  return [boards, setVal, loaded, loaded, loadedUid, loadError] as [typeof boards, typeof setVal, boolean, boolean, string | undefined, string];
 }
 
 function useClickOutside(ref, cb) {
@@ -94,14 +469,400 @@ function useCelebration() {
   return { cel, celebrate };
 }
 
+class AppErrorBoundary extends Component<any, { hasError: boolean; message: string }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return {
+      hasError: true,
+      message: error?.message || "Unexpected error",
+    };
+  }
+
+  componentDidCatch(error: any) {
+    console.error("App crashed:", error);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f7f8fc", padding: 16 }}>
+        <div style={{ maxWidth: 620, background: "#fff", borderRadius: 16, border: "1px solid #eceef5", boxShadow: "0 10px 30px rgba(0,0,0,.1)", padding: 24 }}>
+          <div style={{ fontWeight: 900, fontSize: 22, color: "#1f1f3b" }}>Something went wrong</div>
+          <div style={{ marginTop: 8, color: "#676879", fontSize: 13, lineHeight: 1.6 }}>
+            The app hit a runtime error and was stopped to prevent a white screen.
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#e2445c", background: "#fdeef1", border: "1px solid #f6d8df", borderRadius: 8, padding: "8px 10px" }}>
+            {this.state.message}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ marginTop: 12, border: "none", borderRadius: 8, background: "#0073ea", color: "#fff", fontSize: 13, fontWeight: 700, padding: "8px 12px", cursor: "pointer" }}
+          >
+            Reload page
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 function isOverdue(due) {
   if (!due) return false;
   return new Date(due) < new Date(new Date().toDateString());
 }
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function diffDays(start, end) {
+  const ms = 24 * 60 * 60 * 1000;
+  return Math.floor((end.getTime() - start.getTime()) / ms);
+}
+
+function getTaskRange(task) {
+  const parsedStart = parseDateOnly(task?.start);
+  const parsedDue = parseDateOnly(task?.due);
+  if (!parsedStart && !parsedDue) return null;
+  const start = parsedStart || parsedDue;
+  const end = parsedDue || parsedStart;
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
+function getTaskDurationDays(task) {
+  const range = getTaskRange(task);
+  if (!range) return 0;
+  return diffDays(range.start, range.end) + 1;
+}
+
+function formatDateOnly(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function numberOrDefault(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function getEffortHours(task) {
+  return Math.max(0, numberOrDefault(task?.effortHours, 0));
+}
+
+function getReviewBufferDays(task) {
+  return Math.max(0, numberOrDefault(task?.reviewBufferDays, 1));
+}
+
+function getRevisionBufferDays(task) {
+  return Math.max(0, numberOrDefault(task?.revisionBufferDays, 1));
+}
+
+function getRequiredWorkDays(task, capacityHoursPerDay = 6) {
+  const effort = getEffortHours(task);
+  if (effort <= 0) return 0;
+  const cap = Math.max(1, Number(capacityHoursPerDay) || 6);
+  return Math.max(1, Math.ceil(effort / cap));
+}
+
+function getPlanningAnalysis(task, capacityHoursPerDay = 6) {
+  const today = new Date(new Date().toDateString());
+  const finalDeadline = parseDateOnly(task?.due);
+  const pmReviewDateManual = parseDateOnly(task?.pmReviewDate);
+  const reviewBuffer = getReviewBufferDays(task);
+  const revisionBuffer = getRevisionBufferDays(task);
+  const effortHours = getEffortHours(task);
+  const requiredWorkDays = getRequiredWorkDays(task, capacityHoursPerDay);
+
+  if (!finalDeadline) {
+    return {
+      risk: "Missing deadline",
+      riskColor: "#98a1b3",
+      riskBg: "#f6f7fb",
+      reason: "Set a Final Deadline to calculate a suggested schedule.",
+      effortHours,
+      requiredWorkDays,
+      suggestedStart: null,
+      suggestedPmReview: pmReviewDateManual,
+      latestInternalFinish: pmReviewDateManual,
+      finalDeadline: null,
+      slackDays: null,
+    };
+  }
+
+  const suggestedPmReview = pmReviewDateManual || addDays(finalDeadline, -(reviewBuffer + revisionBuffer));
+  const latestInternalFinish = suggestedPmReview;
+  const suggestedStart = requiredWorkDays > 0 ? addDays(latestInternalFinish, -(requiredWorkDays - 1)) : latestInternalFinish;
+  const slackDays = diffDays(today, suggestedStart);
+  const pmToDeadlineDays = diffDays(suggestedPmReview, finalDeadline);
+
+  let risk = "On Track";
+  let riskColor = "#00c875";
+  let riskBg = "#e6f9f1";
+  let reason = "The task still has enough time before PM review and final deadline.";
+
+  if (task?.status === "Done" || task?.status === "Submitted" || task?.status === "Approved") {
+    risk = "Completed";
+    riskColor = "#00c875";
+    riskBg = "#e6f9f1";
+    reason = "This task is already completed or approved.";
+  } else if (suggestedPmReview > finalDeadline) {
+    risk = "Invalid";
+    riskColor = "#e2445c";
+    riskBg = "#fdeef1";
+    reason = "PM Review Date is after the Final Deadline.";
+  } else if (pmToDeadlineDays < revisionBuffer) {
+    risk = "Tight Review";
+    riskColor = "#ff642e";
+    riskBg = "#fff2ec";
+    reason = "There is not enough revision buffer between PM review and final deadline.";
+  } else if (suggestedStart < today) {
+    risk = "At Risk";
+    riskColor = "#e2445c";
+    riskBg = "#fdeef1";
+    reason = "The latest suggested start date has already passed.";
+  } else if (slackDays <= 1) {
+    risk = "Tight";
+    riskColor = "#fdab3d";
+    riskBg = "#fff8e6";
+    reason = "This can still fit, but there is almost no spare time.";
+  }
+
+  return {
+    risk,
+    riskColor,
+    riskBg,
+    reason,
+    effortHours,
+    requiredWorkDays,
+    reviewBuffer,
+    revisionBuffer,
+    suggestedStart,
+    suggestedPmReview,
+    latestInternalFinish,
+    finalDeadline,
+    slackDays,
+    pmToDeadlineDays,
+  };
+}
+
+function isPmReviewDueSoon(task) {
+  const d = parseDateOnly(task?.pmReviewDate);
+  if (!d) return false;
+  const today = new Date(new Date().toDateString());
+  const diff = diffDays(today, d);
+  return diff >= 0 && diff <= 3;
+}
+
 function isDueSoon(due) {
   if (!due) return false;
   const diff = (new Date(due).getTime() - new Date(new Date().toDateString()).getTime()) / 86400000;
   return diff >= 0 && diff <= 2;
+}
+
+function mapAuthError(code) {
+  switch (code) {
+    case "auth/invalid-email":
+      return "Invalid email format.";
+    case "auth/user-not-found":
+    case "auth/invalid-credential":
+      return "Account not found.";
+    case "auth/wrong-password":
+      return "Incorrect password.";
+    case "auth/email-already-in-use":
+      return "This email is already in use.";
+    case "auth/weak-password":
+      return "Password is too weak (minimum 6 characters).";
+    case "auth/operation-not-allowed":
+      return "Email/Password login is not enabled in Firebase Authentication.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Please try again later.";
+    default:
+      return "Something went wrong. Please try again.";
+  }
+}
+
+function AuthGate() {
+  const [mode, setMode] = useState("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState<"error" | "success">("error");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!firebaseAuth) {
+      setNoticeType("error");
+      setNotice("Firebase Authentication is not configured yet.");
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedName = name.trim();
+
+    if (!normalizedEmail || !password.trim()) {
+      setNoticeType("error");
+      setNotice("Please enter both email and password.");
+      return;
+    }
+
+    setLoading(true);
+    setNotice("");
+
+    if (mode === "register") {
+      if (!normalizedName) {
+        setLoading(false);
+        setNoticeType("error");
+        setNotice("Please enter your display name.");
+        return;
+      }
+      if (password.length < 6) {
+        setLoading(false);
+        setNoticeType("error");
+        setNotice("Password must be at least 6 characters.");
+        return;
+      }
+
+      try {
+        const cred = await createUserWithEmailAndPassword(firebaseAuth, normalizedEmail, password);
+        if (normalizedName) {
+          await updateProfile(cred.user, { displayName: normalizedName });
+        }
+      } catch (err) {
+        setNoticeType("error");
+        setNotice(mapAuthError(err?.code));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    try {
+      await signInWithEmailAndPassword(firebaseAuth, normalizedEmail, password);
+    } catch (err) {
+      setNoticeType("error");
+      setNotice(mapAuthError(err?.code));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResetPassword() {
+    if (!firebaseAuth) {
+      setNoticeType("error");
+      setNotice("Firebase Authentication is not configured yet.");
+      return;
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setNoticeType("error");
+      setNotice("Enter your email before resetting your password.");
+      return;
+    }
+
+    setLoading(true);
+    setNotice("");
+    try {
+      await sendPasswordResetEmail(firebaseAuth, normalizedEmail);
+      setNoticeType("success");
+      setNotice("Password reset email sent.");
+      window.alert("Password reset email sent. Please check your inbox/spam folder.");
+    } catch (err) {
+      setNoticeType("error");
+      setNotice(mapAuthError(err?.code));
+      window.alert(mapAuthError(err?.code));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const hasInvite = !!new URLSearchParams(window.location.search).get("invite");
+
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(140deg, #eef3ff 0%, #f8f4ff 42%, #fff4f1 100%)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ width: "100%", maxWidth: 430, background: "#fff", borderRadius: 18, boxShadow: "0 10px 35px rgba(25, 25, 35, .12)", border: "1px solid #eceef5", overflow: "hidden" }}>
+        <div style={{ padding: "18px 22px", borderBottom: "1px solid #eceef5", background: "#fafbff" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#1f1f3b" }}>HOLIFRIDAY</div>
+          <div style={{ marginTop: 4, fontSize: 12, color: "#676879" }}>Sign in to access your shared boards.</div>
+        </div>
+        {hasInvite && (
+          <div style={{ padding: "10px 22px", background: "#eef4ff", borderBottom: "1px solid #dde8ff", fontSize: 12, color: "#1f5ecf", fontWeight: 700 }}>
+            🔗 You have a group invitation — sign in or register to join automatically.
+          </div>
+        )}
+
+        <div style={{ padding: 22 }}>
+          <div style={{ display: "flex", gap: 6, padding: 4, borderRadius: 10, background: "#f3f5fb", marginBottom: 16 }}>
+            {[{ id: "login", label: "Login" }, { id: "register", label: "Register" }].map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => { setMode(opt.id); setNotice(""); setPassword(""); }}
+                style={{ flex: 1, border: "none", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontWeight: 700, cursor: "pointer", background: mode === opt.id ? "#fff" : "none", color: mode === opt.id ? "#0073ea" : "#676879", boxShadow: mode === opt.id ? "0 1px 3px rgba(0,0,0,.08)" : "none" }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {mode === "register" && (
+              <input
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Display name"
+                style={{ border: "1px solid #d8dbe4", borderRadius: 10, padding: "10px 12px", fontSize: 14, outline: "none" }}
+              />
+            )}
+            <input
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              type="email"
+              placeholder="email@example.com"
+              style={{ border: "1px solid #d8dbe4", borderRadius: 10, padding: "10px 12px", fontSize: 14, outline: "none" }}
+            />
+            <input
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              type="password"
+              placeholder="Password"
+              style={{ border: "1px solid #d8dbe4", borderRadius: 10, padding: "10px 12px", fontSize: 14, outline: "none" }}
+            />
+            <button type="submit" disabled={loading} style={{ marginTop: 2, background: loading ? "#c4c4c4" : "#0073ea", color: "#fff", border: "none", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontWeight: 800, cursor: loading ? "not-allowed" : "pointer" }}>
+              {loading ? "Processing..." : mode === "register" ? "Create account" : "Sign in"}
+            </button>
+            {mode === "login" && (
+              <button type="button" disabled={loading} onClick={handleResetPassword} style={{ marginTop: 2, background: "none", color: loading ? "#9bb7e8" : "#0073ea", border: "none", borderRadius: 10, padding: "6px 0", fontSize: 12, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer" }}>
+                Forgot password? Send reset link
+              </button>
+            )}
+          </form>
+
+          {mode === "login" && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "#98a1b3" }}>
+              Tip: If nothing arrives, check spam and verify Email/Password is enabled in Firebase Auth.
+            </div>
+          )}
+
+          <div style={{ marginTop: 10, minHeight: 18, fontSize: 12, color: noticeType === "success" ? "#00a35a" : "#e2445c" }}>{notice}</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── UI Primitives ───────────────────────────────────────────────────────────
@@ -151,6 +912,44 @@ function Dropdown({ value, options, onChange, width = 140 }) {
   );
 }
 
+function DotSlider({ value, options, onChange, width = 170, disabled = false }) {
+  const activeIndex = Math.max(0, options.findIndex(o => o.label === value));
+  const active = options[activeIndex] || options[0];
+
+  return (
+    <div style={{ width: "100%", maxWidth: width, minWidth: 96 }}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
+        <span style={{ maxWidth: "100%", textAlign: "center", background: active?.color || "#676879", color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 700, opacity: disabled ? 0.7 : 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {active?.label || value}
+        </span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(options.length - 1, 0)}
+          step={1}
+          value={activeIndex}
+          disabled={disabled}
+          onChange={e => onChange(options[Number(e.target.value)]?.label || value)}
+          style={{ flex: 1, accentColor: active?.color || "#579bfc", cursor: disabled ? "not-allowed" : "pointer", height: 18 }}
+        />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, padding: "0 2px" }}>
+        {options.map((opt, idx) => (
+          <button
+            key={opt.label}
+            disabled={disabled}
+            title={opt.label}
+            onClick={() => onChange(opt.label)}
+            style={{ width: 10, height: 10, borderRadius: "50%", border: "none", padding: 0, background: idx <= activeIndex ? opt.color : "#e1e5ef", transition: "background .15s", cursor: disabled ? "not-allowed" : "pointer" }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Confetti & Toast ─────────────────────────────────────────────────────────
 
 function Confetti({ show, originX }) {
@@ -186,14 +985,30 @@ function Confetti({ show, originX }) {
 
 function Toast({ show, taskName }) {
   if (!show) return null;
-  const msgs = ["🎉 ยอดเยี่ยมมาก!", "🚀 เสร็จแล้ว!", "✅ เก่งมากเลย!", "🏆 สำเร็จ!", "💪 ทำได้เลย!"];
+  const msgs = ["🎉 Great job!", "🚀 Completed!", "✅ Nice work!", "🏆 Success!", "💪 You nailed it!"];
   const msg = useRef(msgs[Math.floor(Math.random() * msgs.length)]).current;
   return (
     <div style={{ position: "fixed", bottom: 32, left: "50%", transform: "translateX(-50%)", background: "#1f1f3b", color: "#fff", borderRadius: 14, padding: "14px 24px", zIndex: 9998, boxShadow: "0 8px 32px rgba(0,0,0,.28)", display: "flex", alignItems: "center", gap: 12, minWidth: 260, animation: "toastIn 2.6s ease forwards", pointerEvents: "none" }}>
       <div style={{ fontSize: 28 }}>🎊</div>
       <div>
         <div style={{ fontWeight: 800, fontSize: 15 }}>{msg}</div>
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,.5)", marginTop: 2 }}>"{taskName}" เสร็จแล้ว</div>
+           <div style={{ fontSize: 12, color: "rgba(255,255,255,.5)", marginTop: 2 }}>"{taskName}" is done</div>
+      </div>
+    </div>
+  );
+}
+
+function AssignmentMailNotice({ notice, onClose }) {
+  if (!notice) return null;
+  return (
+    <div style={{ position: "fixed", top: 74, right: 20, zIndex: 9997, width: 320, animation: "mailDropIn .45s ease" }}>
+      <div style={{ background: "#ffffff", border: "1px solid #dfe9ff", borderRadius: 14, boxShadow: "0 14px 34px rgba(0,0,0,.16)", overflow: "hidden" }}>
+        <div style={{ padding: "10px 12px", background: "linear-gradient(135deg, #eef4ff 0%, #e8fff3 100%)", borderBottom: "1px solid #dfe9ff", display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 20, animation: "mailPulse 1.2s ease-in-out infinite" }}>✉</div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#1f5ecf" }}>New Assignment Mail</div>
+          <button onClick={onClose} style={{ marginLeft: "auto", border: "none", background: "none", color: "#8b96ad", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: "11px 12px", fontSize: 12, color: "#323338", lineHeight: 1.5 }}>{notice.text}</div>
       </div>
     </div>
   );
@@ -209,32 +1024,46 @@ function TagPill({ label }: any) {
 
 // ─── Task Detail Panel ────────────────────────────────────────────────────────
 
-function TaskPanel({ item, onUpdate, onClose }) {
+function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canEditStatus, canComment }) {
   const [comment, setComment] = useState("");
   const [newSub, setNewSub] = useState("");
 
+  function applyPatch(patch, type = "general") {
+    if (type === "status") {
+      if (!canEditStatus) return;
+    } else if (!canEditTask) {
+      return;
+    }
+    onUpdate({ ...item, ...patch });
+  }
+
   function addComment() {
-    if (!comment.trim()) return;
+    if (!canComment || !comment.trim()) return;
     onUpdate({ ...item, comments: [...item.comments, { id: uid(), author: "You", text: comment.trim(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }] });
     setComment("");
   }
   function addSubtask() {
-    if (!newSub.trim()) return;
+    if (!canEditTask || !newSub.trim()) return;
     onUpdate({ ...item, subtasks: [...item.subtasks, { id: uid(), name: newSub.trim(), done: false }] });
     setNewSub("");
   }
   function toggleSub(id) {
+    if (!canEditTask) return;
     onUpdate({ ...item, subtasks: item.subtasks.map(s => s.id === id ? { ...s, done: !s.done } : s) });
   }
   function delSub(id) {
+    if (!canEditTask) return;
     onUpdate({ ...item, subtasks: item.subtasks.filter(s => s.id !== id) });
   }
   function toggleTag(label) {
+    if (!canEditTask) return;
     const tags = item.tags.includes(label) ? item.tags.filter(t => t !== label) : [...item.tags, label];
     onUpdate({ ...item, tags });
   }
 
   const doneSubs = item.subtasks.filter(s => s.done).length;
+  const durationDays = getTaskDurationDays(item);
+  const planning = getPlanningAnalysis(item);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 2000, display: "flex" }}>
@@ -243,7 +1072,9 @@ function TaskPanel({ item, onUpdate, onClose }) {
         {/* Header */}
         <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #e6e9ef" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-            <InlineEdit value={item.name} onChange={v => onUpdate({ ...item, name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338", flex: 1 }} />
+            {canEditTask
+              ? <InlineEdit value={item.name} onChange={v => onUpdate({ ...item, name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338", flex: 1 }} />
+              : <div style={{ fontSize: 18, fontWeight: 700, color: "#323338", flex: 1 }}>{item.name}</div>}
             <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#aaa", lineHeight: 1, flexShrink: 0 }}>×</button>
           </div>
         </div>
@@ -252,13 +1083,53 @@ function TaskPanel({ item, onUpdate, onClose }) {
           {/* Fields */}
           <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: "10px 12px", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Status</span>
-            <Dropdown value={item.status} options={STATUS_OPTIONS} onChange={v => onUpdate({ ...item, status: v })} width={150} />
+            {canEditStatus
+              ? <DotSlider value={item.status} options={STATUS_OPTIONS} onChange={v => applyPatch({ status: v }, "status")} width={220} />
+              : <div style={{ width: 220, padding: "4px 8px", borderRadius: 4, background: "#f2f4f8", color: "#98a1b3", fontWeight: 700, fontSize: 11, border: "1px solid #e6e9ef" }}>{item.status}</div>}
             <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Priority</span>
-            <Dropdown value={item.priority} options={PRIORITY_OPTIONS} onChange={v => onUpdate({ ...item, priority: v })} width={110} />
+            {canEditTask
+              ? <DotSlider value={item.priority} options={PRIORITY_OPTIONS} onChange={v => applyPatch({ priority: v })} width={220} />
+              : <div style={{ width: 220, padding: "4px 8px", borderRadius: 4, background: "#f2f4f8", color: "#98a1b3", fontWeight: 700, fontSize: 11, border: "1px solid #e6e9ef" }}>{item.priority}</div>}
             <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Owner</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Avatar name={item.owner} size={22} /><span style={{ fontSize: 13 }}>{item.owner}</span></div>
-            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Due Date</span>
-            <input type="date" value={item.due} onChange={e => onUpdate({ ...item, due: e.target.value })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}><Avatar name={item.owner} size={22} /><span style={{ fontSize: 13 }}>{item.owner}</span></div>
+              {canEditTask && currentUserName && currentUserName !== item.owner && (
+                <button
+                  onClick={() => applyPatch({ owner: currentUserName })}
+                  style={{ border: "1px solid #cdd7ee", background: "#f4f8ff", color: "#1f5ecf", borderRadius: 999, padding: "3px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                >
+                  Assign to me
+                </button>
+              )}
+            </div>
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Start Date</span>
+            <input type="date" disabled={!canEditTask} value={item.start || ""} onChange={e => applyPatch({ start: e.target.value })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Final Deadline</span>
+            <input type="date" disabled={!canEditTask} value={item.due || ""} onChange={e => applyPatch({ due: e.target.value })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Duration</span>
+            <span style={{ fontSize: 12, color: durationDays > 0 ? "#323338" : "#a7adba", fontWeight: 700 }}>{durationDays > 0 ? `${durationDays} day${durationDays > 1 ? "s" : ""}` : "Set start/deadline"}</span>
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>PM Review Date</span>
+            <input type="date" disabled={!canEditTask} value={item.pmReviewDate || ""} onChange={e => applyPatch({ pmReviewDate: e.target.value })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Effort Hours</span>
+            <input type="number" min={0} step={0.5} disabled={!canEditTask} value={item.effortHours ?? ""} onChange={e => applyPatch({ effortHours: Number(e.target.value) || 0 })} placeholder="e.g. 8" style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>PM Buffer</span>
+            <input type="number" min={0} step={0.5} disabled={!canEditTask} value={item.reviewBufferDays ?? 1} onChange={e => applyPatch({ reviewBufferDays: Number(e.target.value) || 0 })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+            <span style={{ fontSize: 12, color: "#676879", fontWeight: 600 }}>Revision Buffer</span>
+            <input type="number" min={0} step={0.5} disabled={!canEditTask} value={item.revisionBufferDays ?? 1} onChange={e => applyPatch({ revisionBufferDays: Number(e.target.value) || 0 })} style={{ border: "1px solid #e6e9ef", borderRadius: 4, padding: "4px 8px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8", color: canEditTask ? "#323338" : "#98a1b3" }} />
+          </div>
+
+          <div style={{ border: `1px solid ${planning.riskColor}33`, background: planning.riskBg, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 900, color: "#323338" }}>🧠 Schedule Analysis</div>
+              <span style={{ background: planning.riskColor, color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 900 }}>{planning.risk}</span>
+            </div>
+            <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 11, color: "#676879" }}>
+              <div><b style={{ color: "#323338" }}>Suggested Start:</b><br />{formatDateOnly(planning.suggestedStart) || "—"}</div>
+              <div><b style={{ color: "#323338" }}>Send to PM:</b><br />{formatDateOnly(planning.suggestedPmReview) || "—"}</div>
+              <div><b style={{ color: "#323338" }}>Work:</b><br />{planning.effortHours || "—"} hr / {planning.requiredWorkDays || "—"} day(s)</div>
+              <div><b style={{ color: "#323338" }}>Final:</b><br />{formatDateOnly(planning.finalDeadline) || "—"}</div>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: "#676879", lineHeight: 1.45 }}>{planning.reason}</div>
           </div>
 
           {/* Tags */}
@@ -291,16 +1162,16 @@ function TaskPanel({ item, onUpdate, onClose }) {
                 )}
                 {item.subtasks.map(s => (
                   <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #eee" }}>
-                    <input type="checkbox" checked={s.done} onChange={() => toggleSub(s.id)} style={{ accentColor: "#00c875" }} />
+                    <input type="checkbox" disabled={!canEditTask} checked={s.done} onChange={() => toggleSub(s.id)} style={{ accentColor: "#00c875" }} />
                     <span style={{ flex: 1, fontSize: 13, color: s.done ? "#aaa" : "#323338", textDecoration: s.done ? "line-through" : "none" }}>{s.name}</span>
-                    <button onClick={() => delSub(s.id)} style={{ background: "none", border: "none", color: "#ddd", cursor: "pointer", fontSize: 14 }}>×</button>
+                    {canEditTask && <button onClick={() => delSub(s.id)} style={{ background: "none", border: "none", color: "#ddd", cursor: "pointer", fontSize: 14 }}>×</button>}
                   </div>
                 ))}
               </div>
             )}
             <div style={{ display: "flex", gap: 6 }}>
-              <input value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => e.key === "Enter" && addSubtask()} placeholder="Add subtask…" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 6, padding: "6px 10px", fontSize: 13, outline: "none" }} />
-              <button onClick={addSubtask} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+</button>
+              <input disabled={!canEditTask} value={newSub} onChange={e => setNewSub(e.target.value)} onKeyDown={e => e.key === "Enter" && addSubtask()} placeholder="Add subtask…" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 6, padding: "6px 10px", fontSize: 13, outline: "none", background: canEditTask ? "#fff" : "#f2f4f8" }} />
+              {canEditTask && <button onClick={addSubtask} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+</button>}
             </div>
           </div>
 
@@ -319,8 +1190,8 @@ function TaskPanel({ item, onUpdate, onClose }) {
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <Avatar name="You" size={28} />
               <div style={{ flex: 1, display: "flex", gap: 6 }}>
-                <input value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => e.key === "Enter" && addComment()} placeholder="Write a comment…" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none" }} />
-                <button onClick={addComment} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Send</button>
+                <input disabled={!canComment} value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => e.key === "Enter" && addComment()} placeholder="Write a comment…" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: canComment ? "#fff" : "#f2f4f8" }} />
+                {canComment && <button onClick={addComment} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Send</button>}
               </div>
             </div>
           </div>
@@ -356,7 +1227,7 @@ function KanbanCard({ item, onUpdate, onOpen }: any) {
   );
 }
 
-function KanbanView({ board, onUpdate, onCelebrate }) {
+function KanbanView({ board, onUpdate, onCelebrate, currentUserName, currentUserEmail }) {
   function updItem(groupId, updated) {
     if (updated.status === "Done") {
       const old = board.groups.flatMap(g => g.items).find(i => i.id === updated.id);
@@ -367,11 +1238,16 @@ function KanbanView({ board, onUpdate, onCelebrate }) {
 
   const [panelItem, setPanelItem] = useState(null);
   const panelGroup = board.groups.find(g => g.items.some(i => i.id === panelItem?.id));
+  const normalizedUserEmail = normalizeEmail(currentUserEmail);
+  const panelRole = panelGroup ? normalizeRole(panelGroup.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") : "editor";
+  const panelCanEditTask = !normalizedUserEmail || panelRole === "editor";
+  const panelCanEditStatus = panelCanEditTask;
+  const panelCanComment = panelCanEditTask;
 
   return (
     <div style={{ flex: 1, overflowX: "auto", padding: "24px 28px", display: "flex", gap: 16, alignItems: "flex-start" }}>
       {panelItem && panelGroup && (
-        <TaskPanel item={panelItem} onUpdate={u => { updItem(panelGroup.id, u); setPanelItem(u); }} onClose={() => setPanelItem(null)} />
+        <TaskPanel item={panelItem} onUpdate={u => { updItem(panelGroup.id, u); setPanelItem(u); }} onClose={() => setPanelItem(null)} currentUserName={currentUserName} canEditTask={panelCanEditTask} canEditStatus={panelCanEditStatus} canComment={panelCanComment} />
       )}
       {STATUS_OPTIONS.map(col => {
         const allItems = board.groups.flatMap(g => g.items.filter(i => i.status === col.label).map(i => ({ ...i, _gid: g.id })));
@@ -395,83 +1271,747 @@ function KanbanView({ board, onUpdate, onCelebrate }) {
   );
 }
 
-// ─── Dashboard ────────────────────────────────────────────────────────────────
+function CalendarTimelineView({ board, onOpen }) {
+  const scheduledItems = useMemo(() => {
+    return board.groups
+      .flatMap(g => g.items.map(i => ({ ...i, _groupName: g.name, _groupColor: g.color })))
+      .map(item => {
+        const range = getTaskRange(item);
+        if (!range) return null;
+        return { ...item, _start: range.start, _end: range.end };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a._start.getTime() - b._start.getTime());
+  }, [board]);
 
-function Dashboard({ boards }) {
-  const allItems = boards.flatMap(b => b.groups.flatMap(g => g.items));
-  const byStatus = STATUS_OPTIONS.map(s => ({ ...s, count: allItems.filter(i => i.status === s.label).length }));
-  const byPriority = PRIORITY_OPTIONS.map(p => ({ ...p, count: allItems.filter(i => i.priority === p.label).length }));
-  const overdueItems = allItems.filter(i => isOverdue(i.due) && i.status !== "Done");
-  const soonItems    = allItems.filter(i => isDueSoon(i.due) && i.status !== "Done" && !isOverdue(i.due));
-  const maxCount = Math.max(...byStatus.map(s => s.count), 1);
+  const range = useMemo(() => {
+    if (scheduledItems.length === 0) {
+      const today = new Date(new Date().toDateString());
+      return { start: today, end: today, totalDays: 7 };
+    }
+    const startMs = Math.min(...scheduledItems.map(i => i._start.getTime()));
+    const endMs = Math.max(...scheduledItems.map(i => i._end.getTime()));
+    const start = new Date(startMs);
+    const end = new Date(endMs);
+    return { start, end, totalDays: Math.max(diffDays(start, end) + 1, 7) };
+  }, [scheduledItems]);
+
+  const tickDays = Array.from({ length: range.totalDays }, (_, i) => {
+    const d = new Date(range.start);
+    d.setDate(range.start.getDate() + i);
+    return d;
+  });
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-      <h2 style={{ margin: "0 0 24px", fontSize: 20, fontWeight: 800, color: "#323338" }}>📊 Dashboard</h2>
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px 28px" }}>
+      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,.06)", overflow: "hidden" }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#323338" }}>Calendar Timeline</div>
+          <div style={{ fontSize: 12, color: "#676879" }}>
+            {range.start.toLocaleDateString()} - {range.end.toLocaleDateString()} ({range.totalDays} days)
+          </div>
+        </div>
 
-      {/* Summary cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 14, marginBottom: 28 }}>
+        {scheduledItems.length === 0 ? (
+          <div style={{ padding: "36px 20px", textAlign: "center", color: "#98a1b3", fontSize: 13 }}>
+            Add a Start Date or Due Date to tasks to see them on the calendar.
+          </div>
+        ) : (
+          <div style={{ minWidth: 980 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", borderBottom: "1px solid #eef1f7", background: "#fafbff" }}>
+              <div style={{ padding: "10px 12px", fontSize: 11, fontWeight: 700, color: "#676879", textTransform: "uppercase", letterSpacing: 0.5 }}>Task</div>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${range.totalDays}, minmax(20px, 1fr))`, gap: 0 }}>
+                {tickDays.map((day, i) => (
+                  <div key={i} style={{ padding: "10px 0", textAlign: "center", borderLeft: "1px solid #f2f4f9", fontSize: 10, color: "#98a1b3" }}>
+                    {day.getDate()}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {scheduledItems.map(item => {
+              const startOffset = diffDays(range.start, item._start);
+              const spanDays = diffDays(item._start, item._end) + 1;
+              const leftPct = (startOffset / range.totalDays) * 100;
+              const widthPct = (spanDays / range.totalDays) * 100;
+              const status = STATUS_OPTIONS.find(s => s.label === item.status);
+              return (
+                <div key={item.id} style={{ display: "grid", gridTemplateColumns: "280px 1fr", borderBottom: "1px solid #f4f6fb", minHeight: 52 }}>
+                  <button
+                    onClick={() => onOpen(item)}
+                    style={{ border: "none", background: "#fff", borderRight: "1px solid #f2f4f9", textAlign: "left", padding: "8px 12px", cursor: "pointer" }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+                    <div style={{ marginTop: 3, display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#98a1b3" }}>
+                      <span>{item.owner}</span>
+                      <span>•</span>
+                      <span>{item._groupName}</span>
+                      <span>•</span>
+                      <span>{spanDays}d</span>
+                    </div>
+                  </button>
+                  <div style={{ position: "relative", display: "grid", gridTemplateColumns: `repeat(${range.totalDays}, minmax(20px, 1fr))` }}>
+                    {tickDays.map((_, i) => <div key={i} style={{ borderLeft: "1px solid #f7f8fc" }} />)}
+                    <div style={{ position: "absolute", left: `${leftPct}%`, width: `${Math.max(widthPct, 1.4)}%`, top: "50%", transform: "translateY(-50%)", height: 24, borderRadius: 7, background: status?.color || item._groupColor || "#579bfc", color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 3px 8px rgba(0,0,0,.16)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "0 8px" }}>
+                      {spanDays}d
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TeamScheduleView({ board, onOpen }: any) {
+  const [days, setDays] = useState(30);
+  const [capacity, setCapacity] = useState(6);
+  const [hideDone, setHideDone] = useState(true);
+  const [selectedOwner, setSelectedOwner] = useState("All");
+
+  const today = useMemo(() => new Date(new Date().toDateString()), []);
+  const dayList = useMemo(() => Array.from({ length: days }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    return d;
+  }), [today, days]);
+  const dateKeys = useMemo(() => dayList.map(d => d.toISOString().slice(0, 10)), [dayList]);
+
+  const tasks = useMemo(() => {
+    return board.groups
+      .flatMap(g => asArray(g.items).map(i => ({ ...i, _groupId: g.id, _groupName: g.name, _groupColor: g.color })))
+      .map(item => {
+        const range = getTaskRange(item);
+        if (!range) return null;
+        const duration = diffDays(range.start, range.end) + 1;
+        const effort = getEffortHours(item);
+        return { ...item, _start: range.start, _end: range.end, _duration: duration, _effortHours: effort, _hoursPerDay: duration > 0 ? (effort > 0 ? effort / duration : 1) : 0, _analysis: getPlanningAnalysis(item, capacity) };
+      })
+      .filter(Boolean)
+      .filter(item => !hideDone || item.status !== "Done");
+  }, [board, hideDone, capacity]);
+
+  const ownerNames = useMemo(() => {
+    const names = Array.from(new Set<string>(tasks.map((t: any) => (t.owner || "Unassigned").trim() || "Unassigned")));
+    return names.sort((a, b) => a.localeCompare(b));
+  }, [tasks]);
+
+  useEffect(() => {
+    if (selectedOwner !== "All" && !ownerNames.includes(selectedOwner)) setSelectedOwner("All");
+  }, [ownerNames, selectedOwner]);
+
+  const visibleOwners = selectedOwner === "All" ? ownerNames : ownerNames.filter(o => o === selectedOwner);
+
+  const tasksByOwner = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const owner of ownerNames) map.set(owner, []);
+    for (const task of tasks) {
+      const owner = (task.owner || "Unassigned").trim() || "Unassigned";
+      if (!map.has(owner)) map.set(owner, []);
+      map.get(owner).push(task);
+    }
+    for (const list of map.values()) list.sort((a, b) => a._start.getTime() - b._start.getTime());
+    return map;
+  }, [tasks, ownerNames]);
+
+  const workload = useMemo(() => {
+    const result = new Map<string, Map<string, any[]>>();
+    for (const owner of ownerNames) {
+      const byDate = new Map<string, any[]>(dateKeys.map(k => [k, [] as any[]]));
+      for (const task of tasksByOwner.get(owner) || []) {
+        for (const day of dayList) {
+          const key = day.toISOString().slice(0, 10);
+          if (day >= task._start && day <= task._end) byDate.get(key)?.push(task);
+        }
+      }
+      result.set(owner, byDate);
+    }
+    return result;
+  }, [ownerNames, tasksByOwner, dayList, dateKeys]);
+
+  const ownerSummary = visibleOwners.map(owner => {
+    const list = tasksByOwner.get(owner) || [];
+    const byDate = workload.get(owner) || new Map();
+    const loadHours = Array.from(byDate.values()).reduce((sum, v) => sum + v.reduce((s, t) => s + (t._hoursPerDay || 0), 0), 0);
+    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > capacity).length;
+    const overdue = list.filter(t => isOverdue(t.due) && t.status !== "Done").length;
+    const dueSoon = list.filter(t => isDueSoon(t.due) && t.status !== "Done").length;
+    return { owner, taskCount: list.length, loadHours, overloadDays, overdue, dueSoon };
+  });
+
+  const maxLoad = Math.max(1, ...Array.from(workload.values()).flatMap(byDate => Array.from(byDate.values()).map(v => v.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0))));
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px 28px", background: "#f6f7fb" }}>
+      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 12, boxShadow: "0 2px 8px rgba(0,0,0,.06)", overflow: "hidden" }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: "#323338" }}>👥 Team Schedule / Workload</div>
+            <div style={{ marginTop: 3, fontSize: 12, color: "#676879" }}>Check who is busy, overloaded, overdue, or free before planning new work.</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <select value={selectedOwner} onChange={e => setSelectedOwner(e.target.value)} style={{ border: "1px solid #d8dbe4", borderRadius: 7, padding: "6px 8px", fontSize: 12, background: "#fff" }}>
+              <option>All</option>
+              {ownerNames.map(o => <option key={o}>{o}</option>)}
+            </select>
+            <select value={days} onChange={e => setDays(Number(e.target.value))} style={{ border: "1px solid #d8dbe4", borderRadius: 7, padding: "6px 8px", fontSize: 12, background: "#fff" }}>
+              <option value={14}>Next 14 days</option>
+              <option value={30}>Next 30 days</option>
+              <option value={60}>Next 60 days</option>
+            </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}>
+              Capacity hr/day
+              <input type="number" min={1} max={12} value={capacity} onChange={e => setCapacity(Math.max(1, Number(e.target.value) || 1))} style={{ width: 54, border: "1px solid #d8dbe4", borderRadius: 7, padding: "5px 7px", fontSize: 12 }} />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}>
+              <input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} />
+              Hide done
+            </label>
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, borderBottom: "1px solid #eef1f7" }}>
+          {ownerSummary.length === 0 ? (
+            <div style={{ color: "#98a1b3", fontSize: 13 }}>No scheduled tasks. Add Start Date and Due Date to tasks first.</div>
+          ) : ownerSummary.map(s => (
+            <div key={s.owner} style={{ border: "1px solid #eef1f7", borderRadius: 10, padding: "10px 12px", background: s.overloadDays > 0 ? "#fff8e6" : s.overdue > 0 ? "#fff0f3" : "#fafbff" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#eef4ff", color: "#0073ea", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 12 }}>{s.owner.slice(0, 1).toUpperCase()}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.owner}</div>
+                  <div style={{ fontSize: 11, color: "#98a1b3" }}>{s.taskCount} tasks • {Math.round(s.loadHours * 10) / 10}h scheduled</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {s.overloadDays > 0 && <span style={{ background: "#fdab3d", color: "#fff", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>{s.overloadDays} overloaded</span>}
+                {s.overdue > 0 && <span style={{ background: "#e2445c", color: "#fff", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>{s.overdue} overdue</span>}
+                {s.dueSoon > 0 && <span style={{ background: "#579bfc", color: "#fff", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>{s.dueSoon} due soon</span>}
+                {s.overloadDays === 0 && s.overdue === 0 && <span style={{ background: "#e6f9f1", color: "#00854d", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 800 }}>OK</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: Math.max(980, 220 + days * 46) }}>
+            <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${days}, minmax(46px, 1fr))`, background: "#fafbff", borderBottom: "1px solid #eef1f7", position: "sticky", top: 0, zIndex: 2 }}>
+              <div style={{ padding: "10px 12px", fontSize: 11, fontWeight: 800, color: "#676879", textTransform: "uppercase", letterSpacing: .4 }}>Person</div>
+              {dayList.map(day => {
+                const key = day.toISOString().slice(0, 10);
+                const isToday = key === today.toISOString().slice(0, 10);
+                const weekend = day.getDay() === 0 || day.getDay() === 6;
+                return (
+                  <div key={key} style={{ padding: "8px 4px", textAlign: "center", borderLeft: "1px solid #f0f2f8", background: isToday ? "#eef4ff" : weekend ? "#fbfbfd" : "transparent" }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: isToday ? "#0073ea" : "#676879" }}>{day.toLocaleDateString(undefined, { weekday: "short" })}</div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: isToday ? "#0073ea" : "#323338" }}>{day.getDate()}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {visibleOwners.length === 0 ? (
+              <div style={{ padding: "36px 20px", textAlign: "center", color: "#98a1b3", fontSize: 13 }}>No assignees found for the selected schedule.</div>
+            ) : visibleOwners.map(owner => {
+              const byDate = workload.get(owner) || new Map();
+              return (
+                <div key={owner} style={{ display: "grid", gridTemplateColumns: `220px repeat(${days}, minmax(46px, 1fr))`, minHeight: 72, borderBottom: "1px solid #f0f2f8", background: "#fff" }}>
+                  <div style={{ padding: "12px", borderRight: "1px solid #f0f2f8", position: "sticky", left: 0, background: "#fff", zIndex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner}</div>
+                    <div style={{ marginTop: 3, fontSize: 11, color: "#98a1b3" }}>{(tasksByOwner.get(owner) || []).length} scheduled tasks</div>
+                  </div>
+                  {dayList.map(day => {
+                    const key = day.toISOString().slice(0, 10);
+                    const list = byDate.get(key) || [];
+                    const loadHours = list.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0);
+                    const overloaded = loadHours > capacity;
+                    const intensity = Math.min(loadHours / Math.max(maxLoad, capacity), 1);
+                    return (
+                      <div key={key} style={{ minHeight: 72, padding: 4, borderLeft: "1px solid #f7f8fc", background: overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.06 + intensity * 0.16})` : "#fff" }}>
+                        {list.length > 0 && (
+                          <div style={{ display: "flex", justifyContent: "center", marginBottom: 3 }}>
+                            <span style={{ background: overloaded ? "#fdab3d" : "#0073ea", color: "#fff", borderRadius: 12, padding: "1px 6px", fontSize: 10, fontWeight: 900 }}>{Math.round(loadHours * 10) / 10}h</span>
+                          </div>
+                        )}
+                        {list.slice(0, 2).map(task => {
+                          const color = STATUS_OPTIONS.find(s => s.label === task.status)?.color || task._groupColor || "#579bfc";
+                          return (
+                            <button key={task.id} onClick={() => onOpen(task)} title={`${task.name} • ${task._groupName}`} style={{ width: "100%", marginBottom: 3, border: "none", borderLeft: `3px solid ${color}`, background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderRadius: 5, padding: "3px 4px", fontSize: 10, fontWeight: 700, color: "#323338", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {task.name}
+                            </button>
+                          );
+                        })}
+                        {list.length > 2 && <div style={{ fontSize: 10, color: overloaded ? "#a56600" : "#676879", textAlign: "center", fontWeight: 800 }}>+{list.length - 2} more</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ padding: "10px 16px", borderTop: "1px solid #eef1f7", fontSize: 11, color: "#98a1b3", display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <span>Tip: use Start Date + Due Date for multi-day work.</span>
+          <span>Overloaded = estimated hours active on that day exceed capacity hr/day.</span>
+          <span>Done tasks are hidden by default.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function PMPlanningView({ board, onOpen }: any) {
+  const [capacity, setCapacity] = useState(6);
+  const [hideDone, setHideDone] = useState(true);
+  const [riskFilter, setRiskFilter] = useState("All");
+  const tasks = useMemo(() => {
+    return board.groups
+      .flatMap(g => asArray(g.items).map(i => ({ ...i, _groupId: g.id, _groupName: g.name, _groupColor: g.color })))
+      .filter(i => !hideDone || !["Done", "Submitted", "Approved"].includes(i.status))
+      .map(i => ({ ...i, _analysis: getPlanningAnalysis(i, capacity) }))
+      .filter(i => riskFilter === "All" || i._analysis.risk === riskFilter)
+      .sort((a, b) => {
+        const ar = ["At Risk", "Invalid", "Tight Review", "Tight", "Missing deadline", "On Track", "Completed"].indexOf(a._analysis.risk);
+        const br = ["At Risk", "Invalid", "Tight Review", "Tight", "Missing deadline", "On Track", "Completed"].indexOf(b._analysis.risk);
+        if (ar !== br) return ar - br;
+        const ad = a._analysis.suggestedPmReview?.getTime?.() || a._analysis.finalDeadline?.getTime?.() || 9e15;
+        const bd = b._analysis.suggestedPmReview?.getTime?.() || b._analysis.finalDeadline?.getTime?.() || 9e15;
+        return ad - bd;
+      });
+  }, [board, capacity, hideDone, riskFilter]);
+
+  const pmQueue = tasks.filter(t => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(t.status) || isPmReviewDueSoon(t));
+  const atRisk = tasks.filter(t => ["At Risk", "Invalid", "Tight Review"].includes(t._analysis.risk));
+  const riskOptions = ["All", "At Risk", "Invalid", "Tight Review", "Tight", "Missing deadline", "On Track", "Completed"];
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", padding: "20px 28px 28px", background: "#f6f7fb" }}>
+      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 12, overflow: "hidden", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: "#323338" }}>🧠 Planning Analysis / PM Review</div>
+            <div style={{ marginTop: 3, fontSize: 12, color: "#676879" }}>Backward-plan from Final Deadline, PM review time, revision buffer, and effort hours.</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}>Capacity hr/day
+              <input type="number" min={1} max={12} value={capacity} onChange={e => setCapacity(Math.max(1, Number(e.target.value) || 1))} style={{ width: 58, border: "1px solid #d8dbe4", borderRadius: 7, padding: "5px 7px", fontSize: 12 }} />
+            </label>
+            <select value={riskFilter} onChange={e => setRiskFilter(e.target.value)} style={{ border: "1px solid #d8dbe4", borderRadius: 7, padding: "6px 8px", fontSize: 12, background: "#fff" }}>
+              {riskOptions.map(r => <option key={r}>{r}</option>)}
+            </select>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}><input type="checkbox" checked={hideDone} onChange={e => setHideDone(e.target.checked)} />Hide completed</label>
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, borderBottom: "1px solid #eef1f7" }}>
+          <div style={{ border: "1px solid #eef1f7", borderRadius: 10, padding: "10px 12px", background: "#fafbff" }}><div style={{ fontSize: 11, color: "#98a1b3", fontWeight: 800 }}>TOTAL ACTIVE</div><div style={{ fontSize: 22, fontWeight: 900, color: "#323338" }}>{tasks.length}</div></div>
+          <div style={{ border: "1px solid #f6d8df", borderRadius: 10, padding: "10px 12px", background: "#fff0f3" }}><div style={{ fontSize: 11, color: "#bb3354", fontWeight: 800 }}>AT RISK</div><div style={{ fontSize: 22, fontWeight: 900, color: "#e2445c" }}>{atRisk.length}</div></div>
+          <div style={{ border: "1px solid #dbe8ff", borderRadius: 10, padding: "10px 12px", background: "#f0f6ff" }}><div style={{ fontSize: 11, color: "#1f5ecf", fontWeight: 800 }}>PM QUEUE</div><div style={{ fontSize: 22, fontWeight: 900, color: "#0073ea" }}>{pmQueue.length}</div></div>
+          <div style={{ border: "1px solid #fff0c7", borderRadius: 10, padding: "10px 12px", background: "#fff8e6" }}><div style={{ fontSize: 11, color: "#a56600", fontWeight: 800 }}>TOTAL EFFORT</div><div style={{ fontSize: 22, fontWeight: 900, color: "#d4900a" }}>{tasks.reduce((s, t) => s + getEffortHours(t), 0)}h</div></div>
+        </div>
+
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7" }}>
+          <div style={{ fontSize: 12, fontWeight: 900, color: "#323338", marginBottom: 8 }}>PM Review Queue</div>
+          {pmQueue.length === 0 ? <div style={{ fontSize: 12, color: "#98a1b3" }}>No tasks waiting for PM review or due for review soon.</div> : (
+            <div style={{ display: "grid", gap: 8 }}>
+              {pmQueue.slice(0, 8).map(t => <button key={t.id} onClick={() => onOpen(t)} style={{ textAlign: "left", border: "1px solid #eef1f7", background: "#fff", borderLeft: `4px solid ${t._analysis.riskColor}`, borderRadius: 8, padding: "9px 10px", cursor: "pointer" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><b style={{ fontSize: 13, color: "#323338" }}>{t.name}</b><span style={{ fontSize: 11, fontWeight: 900, color: t._analysis.riskColor }}>{t._analysis.risk}</span></div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#676879" }}>PM: {formatDateOnly(t._analysis.suggestedPmReview) || "—"} • Final: {formatDateOnly(t._analysis.finalDeadline) || "—"} • {t.owner || "Unassigned"}</div>
+              </button>)}
+            </div>
+          )}
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 920, borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#fafbff", color: "#676879", textAlign: "left" }}>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Task</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Owner</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Status</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Effort</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Suggested Start</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>PM Review</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Final Deadline</th>
+                <th style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>Risk</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.length === 0 ? <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", color: "#98a1b3" }}>No tasks match this analysis filter.</td></tr> : tasks.map(t => (
+                <tr key={t.id} onClick={() => onOpen(t)} style={{ cursor: "pointer", background: t._analysis.riskBg }}>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7", fontWeight: 800, color: "#323338" }}>{t.name}<div style={{ fontSize: 10, color: "#98a1b3", fontWeight: 600 }}>{t._groupName}</div></td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{t.owner || "Unassigned"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{t.status}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{getEffortHours(t) || "—"}h</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.suggestedStart) || "—"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.suggestedPmReview) || "—"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.finalDeadline) || "—"}</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}><span style={{ background: t._analysis.riskColor, color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 900 }}>{t._analysis.risk}</span><div style={{ marginTop: 3, color: "#676879", fontSize: 10 }}>{t._analysis.reason}</div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dark Mode ───────────────────────────────────────────────────────────────
+
+const DarkCtx = React.createContext<{ dark: boolean; toggle: () => void }>({ dark: false, toggle: () => {} });
+
+function useDark() { return React.useContext(DarkCtx); }
+
+// Theming helper: d(dark value, light value)
+function th(dark: boolean, darkVal: string, lightVal: string) { return dark ? darkVal : lightVal; }
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+// SVG Donut chart
+function DonutChart({ slices, size = 120 }: { slices: { value: number; color: string; label: string }[]; size?: number }) {
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  if (total === 0) return <div style={{ width: size, height: size, borderRadius: "50%", background: "#f0f0f0", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#aaa" }}>No data</div>;
+  const r = 40; const cx = 50; const cy = 50; const stroke = 18;
+  let angle = -90;
+  const paths = slices.map(s => {
+    const pct = s.value / total;
+    const sweep = pct * 360;
+    const startRad = (angle * Math.PI) / 180;
+    const endRad = ((angle + sweep) * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(startRad); const y1 = cy + r * Math.sin(startRad);
+    const x2 = cx + r * Math.cos(endRad);   const y2 = cy + r * Math.sin(endRad);
+    const large = sweep > 180 ? 1 : 0;
+    const d = `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
+    angle += sweep;
+    return { ...s, d, pct };
+  });
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100">
+      {paths.map((p, i) => (
+        <path key={i} d={p.d} fill="none" stroke={p.color} strokeWidth={stroke} strokeLinecap="butt">
+          <title>{p.label}: {p.value} ({Math.round(p.pct * 100)}%)</title>
+        </path>
+      ))}
+      <text x="50" y="54" textAnchor="middle" fontSize="14" fontWeight="bold" fill="#323338">{total}</text>
+    </svg>
+  );
+}
+
+function Dashboard({ boards }: any) {
+  const { dark } = useDark();
+  const bg   = dark ? "#1a1a2e" : "#f7f8fc";
+  const card = dark ? "#16213e" : "#fff";
+  const text = dark ? "#e0e0f0" : "#323338";
+  const sub  = dark ? "#8888aa" : "#676879";
+  const bdr  = dark ? "#2a2a4a" : "#f0f0f0";
+
+  const allItems = boards.flatMap((b: any) => b.groups.flatMap((g: any) => g.items));
+  const byStatus   = STATUS_OPTIONS.map(s => ({ ...s, count: allItems.filter((i: any) => i.status === s.label).length }));
+  const byPriority = PRIORITY_OPTIONS.map(p => ({ ...p, count: allItems.filter((i: any) => i.priority === p.label).length }));
+  const overdueItems = allItems.filter((i: any) => isOverdue(i.due) && i.status !== "Done");
+  const soonItems    = allItems.filter((i: any) => isDueSoon(i.due) && i.status !== "Done" && !isOverdue(i.due));
+  const maxStatus = Math.max(...byStatus.map(s => s.count), 1);
+  const maxPriority = Math.max(...byPriority.map(p => p.count), 1);
+
+  // Per-board progress
+  const boardStats = boards.map((b: any) => {
+    const items = b.groups.flatMap((g: any) => g.items);
+    const done = items.filter((i: any) => i.status === "Done").length;
+    return { name: b.name, color: b.color, total: items.length, done };
+  });
+
+  // Completion % over boards (stacked bar)
+  const completionPct = allItems.length > 0 ? Math.round((allItems.filter((i: any) => i.status === "Done").length / allItems.length) * 100) : 0;
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: bg }}>
+      <h2 style={{ margin: "0 0 24px", fontSize: 20, fontWeight: 800, color: text }}>📊 Dashboard</h2>
+
+      {/* KPI cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(148px,1fr))", gap: 14, marginBottom: 28 }}>
         {[
-          { label: "Total Tasks",   value: allItems.length,                                    color: "#0073ea", icon: "📋" },
-          { label: "Done",          value: allItems.filter(i => i.status === "Done").length,    color: "#00c875", icon: "✅" },
-          { label: "In Progress",   value: allItems.filter(i => i.status === "Working on it").length, color: "#fdab3d", icon: "🔄" },
-          { label: "Stuck",         value: allItems.filter(i => i.status === "Stuck").length,   color: "#e2445c", icon: "🚨" },
-          { label: "Overdue",       value: overdueItems.length,                                 color: "#e2445c", icon: "⚠️" },
-          { label: "Due Soon",      value: soonItems.length,                                    color: "#fdab3d", icon: "⏰" },
+          { label: "Total Tasks",  value: allItems.length,  color: "#0073ea", icon: "📋" },
+          { label: "Done",         value: allItems.filter((i: any) => i.status === "Done").length, color: "#00c875", icon: "✅" },
+          { label: "In Progress",  value: allItems.filter((i: any) => i.status === "Working on it").length, color: "#fdab3d", icon: "🔄" },
+          { label: "Stuck",        value: allItems.filter((i: any) => i.status === "Stuck").length, color: "#e2445c", icon: "🚨" },
+          { label: "Overdue",      value: overdueItems.length, color: "#e2445c", icon: "⚠️" },
+          { label: "Due Soon",     value: soonItems.length, color: "#fdab3d", icon: "⏰" },
         ].map(c => (
-          <div key={c.label} style={{ background: "#fff", borderRadius: 12, padding: "16px 18px", boxShadow: "0 2px 8px rgba(0,0,0,.06)", borderTop: `3px solid ${c.color}` }}>
+          <div key={c.label} style={{ background: card, borderRadius: 12, padding: "16px 18px", boxShadow: "0 2px 8px rgba(0,0,0,.07)", borderTop: `3px solid ${c.color}` }}>
             <div style={{ fontSize: 22 }}>{c.icon}</div>
             <div style={{ fontSize: 28, fontWeight: 800, color: c.color, margin: "4px 0 2px" }}>{c.value}</div>
-            <div style={{ fontSize: 11, color: "#676879", fontWeight: 600 }}>{c.label}</div>
+            <div style={{ fontSize: 11, color: sub, fontWeight: 600 }}>{c.label}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 28 }}>
-        {/* Status chart */}
-        <div style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: "#323338", marginBottom: 16 }}>Status Breakdown</div>
+      {/* Overall progress bar */}
+      <div style={{ background: card, borderRadius: 12, padding: "18px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)", marginBottom: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: 14, color: text }}>Overall Completion</span>
+          <span style={{ fontWeight: 800, fontSize: 20, color: "#00c875" }}>{completionPct}%</span>
+        </div>
+        <div style={{ height: 12, background: bdr, borderRadius: 6, overflow: "hidden" }}>
+          <div style={{ width: `${completionPct}%`, height: "100%", background: "linear-gradient(90deg,#00c875,#00a35a)", borderRadius: 6, transition: "width .6s" }} />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 18 }}>
+        {/* Status donut + bars */}
+        <div style={{ background: card, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: text, marginBottom: 16 }}>Status Breakdown</div>
+          <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 16 }}>
+            <DonutChart slices={byStatus.map(s => ({ value: s.count, color: s.color, label: s.label }))} size={100} />
+            <div style={{ flex: 1 }}>
+              {byStatus.map(s => (
+                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: sub, flex: 1 }}>{s.label}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{s.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
           {byStatus.map(s => (
-            <div key={s.label} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: "#676879" }}>{s.label}</span>
-                <span style={{ fontWeight: 700, color: s.color }}>{s.count}</span>
-              </div>
-              <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                <div style={{ width: `${(s.count / maxCount) * 100}%`, height: "100%", background: s.color, borderRadius: 4, transition: "width .5s" }} />
+            <div key={s.label} style={{ marginBottom: 8 }}>
+              <div style={{ height: 6, background: bdr, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${(s.count / maxStatus) * 100}%`, height: "100%", background: s.color, borderRadius: 3, transition: "width .5s" }} />
               </div>
             </div>
           ))}
         </div>
 
-        {/* Priority chart */}
-        <div style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: "#323338", marginBottom: 16 }}>Priority Breakdown</div>
+        {/* Priority donut + bars */}
+        <div style={{ background: card, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: text, marginBottom: 16 }}>Priority Breakdown</div>
+          <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 16 }}>
+            <DonutChart slices={byPriority.map(p => ({ value: p.count, color: p.color, label: p.label }))} size={100} />
+            <div style={{ flex: 1 }}>
+              {byPriority.map(p => (
+                <div key={p.label} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: p.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 11, color: sub, flex: 1 }}>{p.label}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: p.color }}>{p.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
           {byPriority.map(p => (
-            <div key={p.label} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: "#676879" }}>{p.label}</span>
-                <span style={{ fontWeight: 700, color: p.color }}>{p.count}</span>
-              </div>
-              <div style={{ height: 8, background: "#f0f0f0", borderRadius: 4, overflow: "hidden" }}>
-                <div style={{ width: `${(p.count / Math.max(...byPriority.map(x => x.count), 1)) * 100}%`, height: "100%", background: p.color, borderRadius: 4, transition: "width .5s" }} />
+            <div key={p.label} style={{ marginBottom: 8 }}>
+              <div style={{ height: 6, background: bdr, borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${(p.count / maxPriority) * 100}%`, height: "100%", background: p.color, borderRadius: 3, transition: "width .5s" }} />
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Overdue & soon */}
+      {/* Per-board progress */}
+      {boardStats.length > 0 && (
+        <div style={{ background: card, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)", marginBottom: 18 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: text, marginBottom: 14 }}>Progress by Board</div>
+          {boardStats.map((b: any) => {
+            const pct = b.total > 0 ? Math.round((b.done / b.total) * 100) : 0;
+            return (
+              <div key={b.name} style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 3, background: b.color }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: text }}>{b.name}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: sub }}>{b.done}/{b.total} · <strong style={{ color: b.color }}>{pct}%</strong></span>
+                </div>
+                <div style={{ height: 8, background: bdr, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: b.color, borderRadius: 4, transition: "width .5s" }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ⚠️ Due date alerts */}
       {(overdueItems.length > 0 || soonItems.length > 0) && (
-        <div style={{ background: "#fff", borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: "#323338", marginBottom: 14 }}>⚠️ Needs Attention</div>
-          {[...overdueItems.map(i => ({ ...i, _type: "overdue" })), ...soonItems.map(i => ({ ...i, _type: "soon" }))].map(i => (
-            <div key={i.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
-              <Avatar name={i.owner} size={24} />
-              <span style={{ flex: 1, fontSize: 13, color: "#323338" }}>{i.name}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: i._type === "overdue" ? "#e2445c" : "#fdab3d", background: i._type === "overdue" ? "#fde8ec" : "#fff8ec", borderRadius: 20, padding: "2px 8px" }}>
-                {i._type === "overdue" ? "Overdue" : "Due Soon"} · {i.due}
-              </span>
+        <div style={{ background: card, borderRadius: 12, padding: "20px 22px", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: text, marginBottom: 14 }}>⚠️ Needs Attention</div>
+          {[...overdueItems.map((i: any) => ({ ...i, _type: "overdue" })), ...soonItems.map((i: any) => ({ ...i, _type: "soon" }))]
+            .sort((a: any, b: any) => (a.due || "").localeCompare(b.due || ""))
+            .map((i: any) => (
+              <div key={i.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${bdr}` }}>
+                <Avatar name={i.owner || "?"} size={26} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{i.name}</div>
+                  <div style={{ fontSize: 11, color: sub, marginTop: 1 }}>{i.owner}</div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: i._type === "overdue" ? "#e2445c" : "#d4900a", background: i._type === "overdue" ? "#fde8ec" : "#fff8ec", borderRadius: 20, padding: "2px 8px" }}>
+                    {i._type === "overdue" ? "⚠ Overdue" : "⏰ Due Soon"}
+                  </span>
+                  <span style={{ fontSize: 10, color: sub }}>📅 {i.due}</span>
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Public Signup ───────────────────────────────────────────────────────────
+
+function SignupPanel() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [signups, setSignups] = useState<any[]>([]);
+  const [supabaseClient, setSupabaseClient] = useState<any | null>(null);
+  const enabled = hasSupabaseConfig();
+  const STORAGE_KEY = "holifriday_signups";
+
+  useEffect(() => {
+    let mounted = true;
+    if (!enabled) return;
+    getSupabase().then(client => {
+      if (mounted) setSupabaseClient(client);
+    }).catch(() => {
+      if (mounted) setSupabaseClient(null);
+    });
+    return () => { mounted = false; };
+  }, [enabled]);
+
+  const loadSignups = useCallback(() => {
+    if (supabaseClient) {
+      // Load from Supabase if available
+      (async () => {
+        const { data, error } = await supabaseClient
+          .from(SIGNUPS_TABLE)
+          .select("id,name,email,created_at")
+          .order("created_at", { ascending: false })
+          .limit(8);
+
+        if (!error && data) {
+          setSignups(asArray(data));
+        }
+      })();
+    } else {
+      // Load from localStorage if Supabase not available
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          setSignups(asArray(JSON.parse(stored)));
+        } else {
+          setSignups([]);
+        }
+      } catch {
+        setSignups([]);
+      }
+    }
+  }, [supabaseClient]);
+
+  useEffect(() => {
+    loadSignups();
+  }, [loadSignups]);
+
+  async function submitSignup(e) {
+    e.preventDefault();
+    if (!name.trim() || !email.trim()) {
+      setNotice("Please enter both name and email.");
+      return;
+    }
+
+    setLoading(true);
+    setNotice("");
+
+    if (supabaseClient) {
+      // Save to Supabase
+      const { error } = await supabaseClient.from(SIGNUPS_TABLE).insert({
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+      });
+
+      setLoading(false);
+
+      if (error) {
+        setNotice(error.message.includes("duplicate") ? "This email is already registered." : "Could not save. Please try again.");
+        return;
+      }
+    } else {
+      // Save to localStorage
+      try {
+        const newSignup = {
+          id: Date.now(),
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          created_at: new Date().toISOString(),
+        };
+        const stored = localStorage.getItem(STORAGE_KEY);
+        const current = stored ? asArray(JSON.parse(stored)) : [];
+        const updated = [newSignup, ...current].slice(0, 8);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        setSignups(updated);
+      } catch {
+        setLoading(false);
+        setNotice("Could not save. Please try again.");
+        return;
+      }
+    }
+
+    setLoading(false);
+    setName("");
+    setEmail("");
+    setNotice("Successfully registered.");
+    loadSignups();
+  }
+
+  return (
+    <div style={{ background: "#fff", borderBottom: "1px solid #e6e9ef", padding: "12px 20px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
+        <div style={{ minWidth: 240 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#323338" }}>Join HOLIFRIDAY</div>
+          <div style={{ fontSize: 12, color: "#676879", marginTop: 2 }}>
+            Share the deployed link so others can access and register.
+          </div>
+        </div>
+
+        <form onSubmit={submitSignup} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flex: 1 }}>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Your name"
+            style={{ border: "1px solid #d8dbe4", borderRadius: 8, padding: "8px 10px", fontSize: 13, minWidth: 150, outline: "none" }}
+          />
+          <input
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            type="email"
+            placeholder="email@example.com"
+            style={{ border: "1px solid #d8dbe4", borderRadius: 8, padding: "8px 10px", fontSize: 13, minWidth: 220, outline: "none" }}
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ background: loading ? "#c4c4c4" : "#0073ea", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, fontSize: 13, cursor: loading ? "not-allowed" : "pointer" }}
+          >
+            {loading ? "Saving..." : "Sign up"}
+          </button>
+        </form>
+      </div>
+
+      <div style={{ marginTop: 8, fontSize: 12, color: notice.includes("Successfully") ? "#00a35a" : "#676879" }}>
+        {notice || (enabled ? `Latest signups: ${signups.length} (stored in Supabase)` : `Latest signups: ${signups.length} (stored temporarily in localStorage)`)}
+      </div>
+
+      {signups.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {signups.map(u => (
+            <div key={u.id} style={{ border: "1px solid #e6e9ef", borderRadius: 999, padding: "4px 10px", fontSize: 11, color: "#323338", background: "#f8f9fc" }}>
+              {u.name} · {u.email}
             </div>
           ))}
         </div>
@@ -482,15 +2022,23 @@ function Dashboard({ boards }) {
 
 // ─── Table Row ────────────────────────────────────────────────────────────────
 
-function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen }: any) {
+function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen, ownerOptions = OWNER_POOL, currentUserEmail, canEditTask, canEditStatus }: any) {
   const [hovered, setHovered] = useState(false);
   const [ownerOpen, setOwnerOpen] = useState(false);
+  const safeOwnerOptions = ownerOptions.length > 0 ? ownerOptions : ["No owner"];
+  const [assigneeIndex, setAssigneeIndex] = useState(0);
   const ownerRef = useRef<HTMLTableCellElement | null>(null);
   const statusRef = useRef<HTMLTableCellElement | null>(null);
   useClickOutside(ownerRef, () => setOwnerOpen(false));
 
+  useEffect(() => {
+    const idx = safeOwnerOptions.indexOf(item.owner);
+    setAssigneeIndex(idx >= 0 ? idx : 0);
+  }, [item.owner, safeOwnerOptions]);
+
   const overdue = isOverdue(item.due) && item.status !== "Done";
   const soon    = isDueSoon(item.due) && item.status !== "Done" && !overdue;
+  const canChangeStatus = canEditTask || canEditStatus || normalizeEmail(item.owner) === normalizeEmail(currentUserEmail);
 
   function upd(patch) {
     if (patch.status === "Done" && item.status !== "Done") {
@@ -501,13 +2049,22 @@ function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen }: 
   }
 
   return (
-    <tr onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
-      style={{ background: hovered ? "#f0f4ff" : "#fff", transition: "background .12s" }}>
+    <tr
+      draggable
+      onDragStart={e => { e.dataTransfer.setData("taskId", String(item.id)); e.currentTarget.style.opacity = "0.4"; }}
+      onDragEnd={e => { e.currentTarget.style.opacity = "1"; }}
+      onDragOver={e => { e.preventDefault(); e.currentTarget.style.background = "#e8f0ff"; }}
+      onDragLeave={e => { e.currentTarget.style.background = hovered ? "#f0f4ff" : "#fff"; }}
+      onDrop={e => { e.preventDefault(); e.currentTarget.style.background = hovered ? "#f0f4ff" : "#fff"; const draggedId = e.dataTransfer.getData("taskId"); if (draggedId && String(item.id) !== draggedId) { (window as any).__holiDrop?.(draggedId, item.id); } }}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{ background: hovered ? "#f0f4ff" : "#fff", transition: "background .12s", cursor: "grab" }}>
       <td style={{ width: 4, padding: 0 }}><div style={{ width: 4, minHeight: 38, background: groupColor }} /></td>
       <td style={{ width: 32, textAlign: "center", padding: "0 4px" }}><input type="checkbox" style={{ accentColor: "#0073ea" }} /></td>
       <td style={{ padding: "6px 8px", minWidth: 200 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <InlineEdit value={item.name} onChange={v => upd({ name: v })} style={{ fontSize: 13, color: "#323338" }} />
+          {canEditTask
+            ? <InlineEdit value={item.name} onChange={v => upd({ name: v })} style={{ fontSize: 13, color: "#323338" }} />
+            : <span style={{ fontSize: 13, color: "#323338" }}>{item.name}</span>}
           {item.comments.length > 0 && <span style={{ fontSize: 10, color: "#aaa" }}>💬{item.comments.length}</span>}
           {item.subtasks.length > 0 && <span style={{ fontSize: 10, color: "#aaa" }}>✅{item.subtasks.filter(s => s.done).length}/{item.subtasks.length}</span>}
         </div>
@@ -515,37 +2072,56 @@ function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen }: 
       </td>
       <td style={{ padding: "4px 8px", width: 110 }} ref={ownerRef}>
         <div style={{ position: "relative" }}>
-          <div onClick={() => setOwnerOpen(v => !v)} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-            <Avatar name={item.owner} /><span style={{ fontSize: 12, color: "#676879" }}>{item.owner}</span>
+          <div onClick={() => canEditTask && setOwnerOpen(v => !v)} style={{ display: "flex", alignItems: "center", gap: 6, cursor: canEditTask ? "pointer" : "default" }}>
+            <Avatar name={item.owner || "No owner"} /><span style={{ fontSize: 12, color: "#676879" }}>{item.owner || "No owner"}</span>
           </div>
-          {ownerOpen && (
-            <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 1000, background: "#fff", borderRadius: 6, boxShadow: "0 6px 24px rgba(0,0,0,.18)", border: "1px solid #e6e9ef", minWidth: 130, overflow: "hidden" }}>
-              {OWNER_POOL.map(name => (
-                <div key={name} onClick={() => { upd({ owner: name }); setOwnerOpen(false); }}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", cursor: "pointer" }}
-                  onMouseEnter={e => e.currentTarget.style.background = "#f0f4ff"}
-                  onMouseLeave={e => e.currentTarget.style.background = ""}
-                >
-                  <Avatar name={name} size={22} /><span style={{ fontSize: 12 }}>{name}</span>
-                </div>
-              ))}
+          {canEditTask && ownerOpen && (
+            <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 1000, background: "#fff", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,.18)", border: "1px solid #e6e9ef", minWidth: 220, padding: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#98a1b3", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Assignee Slide</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Avatar name={safeOwnerOptions[assigneeIndex]} size={24} />
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{safeOwnerOptions[assigneeIndex]}</div>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(safeOwnerOptions.length - 1, 0)}
+                step={1}
+                value={assigneeIndex}
+                onChange={e => setAssigneeIndex(Number(e.target.value))}
+                style={{ width: "100%", marginTop: 10 }}
+              />
+              <button
+                onClick={() => { upd({ owner: safeOwnerOptions[assigneeIndex] }); setOwnerOpen(false); }}
+                style={{ marginTop: 8, width: "100%", border: "none", borderRadius: 6, background: "#0073ea", color: "#fff", fontSize: 11, fontWeight: 700, padding: "6px 8px", cursor: "pointer" }}
+              >
+                Assign selected
+              </button>
             </div>
           )}
         </div>
       </td>
-      <td ref={statusRef} style={{ padding: "4px 8px", width: 152 }}>
-        <Dropdown value={item.status} options={STATUS_OPTIONS} onChange={v => upd({ status: v })} width={140} />
+      <td ref={statusRef} style={{ padding: "4px 8px", width: 180 }}>
+        {canChangeStatus ? (
+          <DotSlider value={item.status} options={STATUS_OPTIONS} onChange={v => upd({ status: v })} width={168} />
+        ) : (
+          <div title="Only the assignee can change status" style={{ width: 168, padding: "4px 8px", borderRadius: 4, background: "#f2f4f8", color: "#98a1b3", fontWeight: 700, fontSize: 11, border: "1px solid #e6e9ef", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {item.status}
+          </div>
+        )}
       </td>
-      <td style={{ padding: "4px 8px", width: 110 }}>
-        <Dropdown value={item.priority} options={PRIORITY_OPTIONS} onChange={v => upd({ priority: v })} width={98} />
+      <td style={{ padding: "4px 8px", width: 150 }}>
+        {canEditTask
+          ? <DotSlider value={item.priority} options={PRIORITY_OPTIONS} onChange={v => upd({ priority: v })} width={138} />
+          : <div style={{ width: 138, padding: "4px 8px", borderRadius: 4, background: "#f2f4f8", color: "#98a1b3", fontWeight: 700, fontSize: 11, border: "1px solid #e6e9ef" }}>{item.priority}</div>}
       </td>
       <td style={{ padding: "4px 8px", width: 128 }}>
-        <input type="date" value={item.due} onChange={e => upd({ due: e.target.value })}
-          style={{ border: `1px solid ${overdue ? "#e2445c" : soon ? "#fdab3d" : "#e6e9ef"}`, background: overdue ? "#fde8ec" : soon ? "#fff8ec" : "#fff", borderRadius: 4, padding: "3px 6px", fontSize: 12, color: overdue ? "#e2445c" : soon ? "#d4900a" : "#323338", outline: "none" }} />
+        <input type="date" disabled={!canEditTask} value={item.due} onChange={e => upd({ due: e.target.value })}
+          style={{ border: `1px solid ${overdue ? "#e2445c" : soon ? "#fdab3d" : "#e6e9ef"}`, background: !canEditTask ? "#f2f4f8" : overdue ? "#fde8ec" : soon ? "#fff8ec" : "#fff", borderRadius: 4, padding: "3px 6px", fontSize: 12, color: !canEditTask ? "#98a1b3" : overdue ? "#e2445c" : soon ? "#d4900a" : "#323338", outline: "none" }} />
       </td>
       <td style={{ padding: "0 4px", width: 56, textAlign: "center" }}>
         <button onClick={() => onOpen(item)} style={{ background: "none", border: "none", color: hovered ? "#0073ea" : "#ddd", cursor: "pointer", fontSize: 14, transition: "color .15s" }} title="Open detail">⬡</button>
-        <button onClick={onDelete} style={{ background: "none", border: "none", color: hovered ? "#e2445c" : "#ddd", cursor: "pointer", fontSize: 16, transition: "color .15s" }}>×</button>
+        {canEditTask && <button onClick={onDelete} style={{ background: "none", border: "none", color: hovered ? "#e2445c" : "#ddd", cursor: "pointer", fontSize: 16, transition: "color .15s" }}>×</button>}
       </td>
     </tr>
   );
@@ -553,31 +2129,158 @@ function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen }: 
 
 // ─── Group (Table) ────────────────────────────────────────────────────────────
 
-function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem }: any) {
+function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem, currentUserName, currentUserEmail }: any) {
   const [collapsed, setCollapsed] = useState(false);
+  const [inviteNotice, setInviteNotice] = useState("");
+  const [latestInviteToken, setLatestInviteToken] = useState("");
   const updGroup = patch => onUpdate({ ...group, ...patch });
   const updItem  = item => updGroup({ items: group.items.map(i => i.id === item.id ? item : i) });
   const delItem  = id   => updGroup({ items: group.items.filter(i => i.id !== id) });
-  const addItem  = ()   => updGroup({ items: [...group.items, { id: uid(), name: "New Task", owner: "Alice", status: "Not Started", priority: "Medium", due: "", tags: [], comments: [], subtasks: [] }] });
+  const addItem  = ()   => updGroup({ items: [...group.items, { id: uid(), name: "New Task", owner: currentUserEmail || currentUserName || "No owner", status: "Not Started", priority: "Medium", start: "", due: "", pmReviewDate: "", effortHours: 4, reviewBufferDays: 1, revisionBufferDays: 1, tags: [], comments: [], subtasks: [] }] });
+
+  // Register drag-drop reorder handler for this group
+  useEffect(() => {
+    const prev = (window as any).__holiDrop;
+    (window as any).__holiDrop = (draggedId: string, targetId: string) => {
+      const items = group.items;
+      const fromIdx = items.findIndex(i => String(i.id) === draggedId);
+      if (fromIdx === -1) { prev?.(draggedId, targetId); return; }
+      const toIdx = items.findIndex(i => String(i.id) === targetId);
+      if (toIdx === -1) { prev?.(draggedId, targetId); return; }
+      const next = [...items];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      updGroup({ items: next });
+    };
+    return () => { (window as any).__holiDrop = prev; };
+  });
   const done = group.items.filter(i => i.status === "Done").length;
+  const normalizedUserEmail = normalizeEmail(currentUserEmail);
+  const currentRole = normalizeRole(group.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor");
+  const canManage = !normalizedUserEmail || currentRole === "editor";
+  const canEditTask = canManage;
+  const canEditStatus = true;
+  const memberRoles = group.memberRoles || {};
+  const pendingInvites = asArray(group.invites);
+  const latestInvite = pendingInvites.find(inv => inv.token === latestInviteToken) || pendingInvites[pendingInvites.length - 1] || null;
+  const latestInviteLink = latestInvite
+    ? `${window.location.origin}${window.location.pathname}?invite=${latestInvite.token}`
+    : "";
+
+  const memberOptions = useMemo(() => {
+    return uniqueStrings(["No owner", currentUserName, ...asArray(group.members), ...group.items.map(i => i.owner)]);
+  }, [group.members, group.items, currentUserName]);
+
+  function createInviteLink(role = "viewer") {
+    if (!canManage) {
+      setInviteNotice("User cannot create invite links.");
+      return;
+    }
+    const token = createInviteToken();
+    updGroup({
+      invites: [
+        ...(group.invites || []),
+        { token, role: normalizeRole(role), createdAt: new Date().toISOString() },
+      ],
+    });
+    setLatestInviteToken(token);
+    setInviteNotice(`Link created for ${normalizeRole(role) === "editor" ? "PM" : "User"}.`);
+  }
+
+  async function copyLink(token) {
+    const link = `${window.location.origin}${window.location.pathname}?invite=${token}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setInviteNotice("Link copied!");
+    } catch {
+      setInviteNotice("Copy failed.");
+    }
+  }
+
+  function updateMemberRole(email, role) {
+    if (!canManage) return;
+    updGroup({
+      memberRoles: {
+        ...(group.memberRoles || {}),
+        [memberRoleKey(email)]: normalizeRole(role),
+      },
+    });
+  }
+
+  function removeMember(email) {
+    if (!canManage) return;
+    const nextRoles = { ...(group.memberRoles || {}) };
+    delete nextRoles[memberRoleKey(email)];
+    updGroup({
+      members: asArray(group.members).filter(m => m !== email),
+      memberRoles: nextRoles,
+      items: group.items.map(i => (i.owner === email ? { ...i, owner: "No owner" } : i)),
+    });
+    setInviteNotice("Member removed.");
+  }
+
+  function removeInvite(token) {
+    if (!canManage) return;
+    updGroup({ invites: pendingInvites.filter(inv => inv.token !== token) });
+    setInviteNotice("Invite removed.");
+  }
 
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <button onClick={() => setCollapsed(v => !v)} style={{ background: "none", border: "none", cursor: "pointer", color: "#676879", fontSize: 12, padding: 2 }}>{collapsed ? "▶" : "▼"}</button>
         <div style={{ width: 12, height: 12, borderRadius: 3, background: group.color, flexShrink: 0 }} />
-        <InlineEdit value={group.name} onChange={v => updGroup({ name: v })} style={{ fontWeight: 700, fontSize: 14, color: group.color }} />
+        {canManage
+          ? <InlineEdit value={group.name} onChange={v => updGroup({ name: v })} style={{ fontWeight: 700, fontSize: 14, color: group.color }} />
+          : <span style={{ fontWeight: 700, fontSize: 14, color: group.color }}>{group.name}</span>}
         <span style={{ fontSize: 11, color: "#aaa", marginLeft: 4 }}>{group.items.length} items · {done} done</span>
         {group.items.length > 0 && (
           <div style={{ flex: 1, maxWidth: 80, height: 6, background: "#e6e9ef", borderRadius: 3, overflow: "hidden", marginLeft: 6 }}>
             <div style={{ width: `${(done / group.items.length) * 100}%`, height: "100%", background: "#00c875", transition: "width .3s" }} />
           </div>
         )}
-        <button onClick={onDelete} style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "#c4c4c4", fontSize: 15, padding: "0 4px" }}>🗑</button>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <button onClick={() => createInviteLink("editor")} disabled={!canManage} style={{ border: "1px solid #d0dbf7", background: canManage ? "#edf4ff" : "#f0f0f0", color: canManage ? "#1f5ecf" : "#98a1b3", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 700, cursor: canManage ? "pointer" : "not-allowed" }}>🔗 PM link</button>
+          <button onClick={() => createInviteLink("viewer")} disabled={!canManage} style={{ border: "1px solid #d7e8da", background: canManage ? "#effaf2" : "#f0f0f0", color: canManage ? "#0f8f4a" : "#98a1b3", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 700, cursor: canManage ? "pointer" : "not-allowed" }}>🔗 User link</button>
+        </div>
+        {canManage && <button onClick={onDelete} style={{ background: "none", border: "none", cursor: "pointer", color: "#c4c4c4", fontSize: 15, padding: "0 4px" }}>🗑</button>}
       </div>
+      {(asArray(group.members).length > 0 || inviteNotice) && (
+        <div style={{ margin: "0 0 8px 30px", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {asArray(group.members).map(email => {
+            const role = normalizeRole(memberRoles[memberRoleKey(email)]);
+            return (
+              <div key={email} style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #dbe8ff", background: "#f4f8ff", borderRadius: 999, padding: "2px 6px" }}>
+                <span style={{ fontSize: 10, color: "#1f5ecf" }}>{email}</span>
+                <select value={role} disabled={!canManage} onChange={e => updateMemberRole(email, e.target.value)} style={{ border: "1px solid #bcd0ff", borderRadius: 999, padding: "1px 6px", fontSize: 10, background: "#fff", color: "#1f5ecf" }}>
+                  <option value="editor">Admin</option>
+                  <option value="viewer">User</option>
+                </select>
+                {canManage && <button onClick={() => removeMember(email)} style={{ border: "none", background: "none", color: "#e2445c", fontSize: 12, cursor: "pointer", lineHeight: 1 }}>×</button>}
+              </div>
+            );
+          })}
+          {inviteNotice && <span style={{ fontSize: 10, color: /created|copied/i.test(inviteNotice) ? "#00a35a" : "#e2445c" }}>{inviteNotice}</span>}
+        </div>
+      )}
+      {pendingInvites.length > 0 && (
+        <div style={{ margin: "0 0 10px 30px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {pendingInvites.map(inv => {
+            const link = `${window.location.origin}${window.location.pathname}?invite=${inv.token}`;
+            return (
+              <div key={inv.token} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 10, color: "#676879" }}>
+                <input readOnly value={link} style={{ width: "min(400px, 100%)", border: "1px solid #e6e9ef", borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#676879", background: "#fff" }} />
+                <span style={{ border: "1px solid #e6e9ef", borderRadius: 999, padding: "2px 8px", background: "#fff" }}>{normalizeRole(inv.role) === "editor" ? "Admin" : "User"}</span>
+                <button onClick={() => copyLink(inv.token)} style={{ border: "1px solid #e6e9ef", borderRadius: 999, background: "#fff", color: "#323338", fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>Copy link</button>
+                {canManage && <button onClick={() => removeInvite(inv.token)} style={{ border: "1px solid #f6d8df", borderRadius: 999, background: "#fdeef1", color: "#e2445c", fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>Remove</button>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {!collapsed && (
         <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid #e6e9ef", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <thead>
               <tr style={{ background: "#f6f7fb" }}>
                 <th style={{ width: 4, padding: 0 }} /><th style={{ width: 32 }} />
@@ -590,13 +2293,13 @@ function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem }: any) {
               {group.items.map(item => (
                 <ItemRow key={item.id} item={item} groupColor={group.color}
                   onUpdate={updItem} onDelete={() => delItem(item.id)}
-                  onCelebrate={onCelebrate} onOpen={onOpenItem} />
+                  onCelebrate={onCelebrate} onOpen={onOpenItem} ownerOptions={memberOptions} currentUserEmail={currentUserEmail} canEditTask={canEditTask} canEditStatus={canEditStatus} />
               ))}
             </tbody>
           </table>
-          <button onClick={addItem} style={{ width: "100%", padding: "9px 40px", textAlign: "left", background: "#fff", border: "none", borderTop: "1px solid #f0f0f0", color: "#676879", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
+          <button onClick={addItem} disabled={!canEditTask} style={{ width: "100%", padding: "9px 40px", textAlign: "left", background: canEditTask ? "#fff" : "#f7f8fb", border: "none", borderTop: "1px solid #f0f0f0", color: canEditTask ? "#676879" : "#a7adba", fontSize: 12, cursor: canEditTask ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 6 }}
             onMouseEnter={e => e.currentTarget.style.background = "#f0f4ff"}
-            onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+            onMouseLeave={e => e.currentTarget.style.background = canEditTask ? "#fff" : "#f7f8fb"}
           ><span style={{ fontSize: 16, color: "#0073ea" }}>+</span> Add Task</button>
         </div>
       )}
@@ -604,19 +2307,214 @@ function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem }: any) {
   );
 }
 
+
+function ActivityLogPanel({ logs, onClose }: any) {
+  const sorted = asArray(logs)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 80);
+
+  const actionText = (log) => {
+    const action = asText(log.action).replace(/_/g, " ");
+    const item = log.itemName ? `“${log.itemName}”` : "";
+    const field = log.field ? ` (${log.field})` : "";
+    if (log.oldValue || log.newValue) return `${action}${field} ${item}: ${log.oldValue || "—"} → ${log.newValue || "—"}`;
+    return `${action}${field} ${item}`.trim();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 2100, display: "flex" }}>
+      <div onClick={onClose} style={{ flex: 1, background: "rgba(0,0,0,.35)" }} />
+      <div style={{ width: 440, maxWidth: "92vw", background: "#fff", boxShadow: "-4px 0 32px rgba(0,0,0,.16)", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "18px 20px", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#323338" }}>Activity Log</div>
+          <div style={{ marginLeft: "auto", fontSize: 11, color: "#98a1b3" }}>{sorted.length} recent</div>
+          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#aaa" }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          {sorted.length === 0 ? (
+            <div style={{ padding: 28, textAlign: "center", color: "#98a1b3", fontSize: 13 }}>No activity yet.</div>
+          ) : sorted.map(log => (
+            <div key={log.id} style={{ border: "1px solid #eef1f7", borderRadius: 12, padding: "10px 12px", background: "#fafbff" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                <Avatar name={log.actorName || log.actorEmail || "User"} size={24} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{log.actorName || log.actorEmail || "Unknown user"}</div>
+                  <div style={{ fontSize: 10, color: "#98a1b3" }}>{log.createdAt ? new Date(log.createdAt).toLocaleString() : ""}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "#676879", lineHeight: 1.45 }}>{actionText(log)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Board View ───────────────────────────────────────────────────────────────
 
-function BoardView({ board, onUpdate, onCelebrate }) {
-  const [view, setView] = useState("table"); // table | kanban
+function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName, currentUserEmail, jumpItemId = null, onJumpHandled = null }: any) {
+  const [view, setView] = useState("table"); // table | kanban | calendar | workload
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
+  const [filterOwner, setFilterOwner] = useState("All");
+  const [ownerSlideIndex, setOwnerSlideIndex] = useState(0);
   const [panelItem, setPanelItem] = useState(null);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const normalizedUserEmail = normalizeEmail(currentUserEmail);
+  const totalTasksCount = board.groups.reduce((sum, g) => sum + g.items.length, 0);
+  const canEditBoard = !normalizedUserEmail || board.groups.some(g => normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") === "editor");
+  const canCreateGroup = canEditBoard || board.groups.length === 0 || totalTasksCount === 0;
 
-  const updBoard = patch => onUpdate({ ...board, ...patch });
-  const updGroup = g => updBoard({ groups: board.groups.map(x => x.id === g.id ? g : x) });
-  const delGroup = id => updBoard({ groups: board.groups.filter(g => g.id !== id) });
-  const addGroup = ()  => updBoard({ groups: [...board.groups, { id: uid(), name: "New Group", color: GROUP_COLORS[board.groups.length % GROUP_COLORS.length], items: [] }] });
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-open task panel when jumping from global search
+  useEffect(() => {
+    if (!jumpItemId) return;
+    const item = board.groups.flatMap(g => g.items).find(i => i.id === jumpItemId);
+    if (item) { setPanelItem(item); onJumpHandled?.(); }
+  }, [jumpItemId, board]);
+
+  // ── Keyboard shortcuts ──────────────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      const isTyping = tag === "input" || tag === "textarea" || tag === "select" || (e.target as HTMLElement)?.isContentEditable;
+      if (e.key === "Escape") { setPanelItem(null); return; }
+      if (isTyping) return;
+      if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); return; }
+      if (e.key === "n" || e.key === "N") {
+        // Add task to the first editable group
+        const g = board.groups.find(g => {
+          const role = normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor");
+          return !normalizedUserEmail || role === "editor";
+        });
+        if (g) {
+          updGroup({ ...g, items: [...g.items, { id: uid(), name: "New Task", owner: currentUserEmail || currentUserName || "No owner", status: "Not Started", priority: "Medium", start: "", due: "", pmReviewDate: "", effortHours: 4, reviewBufferDays: 1, revisionBufferDays: 1, tags: [], comments: [], subtasks: [] }] });
+          setView("table");
+        }
+        return;
+      }
+      if (e.key === "g" || e.key === "G") { if (canCreateGroup) addGroup(); return; }
+      if (e.key === "t" || e.key === "T") { setView("table"); return; }
+      if (e.key === "k" || e.key === "K") { setView("kanban"); return; }
+      if (e.key === "c" || e.key === "C") { setView("calendar"); return; }
+      if (e.key === "w" || e.key === "W") { setView("workload"); return; }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [board, canCreateGroup, normalizedUserEmail, currentUserEmail, currentUserName]);
+  // ── End keyboard shortcuts ──────────────────────────────────────────────────
+
+  const patchBoard = updater => {
+    const withActivity = prev => {
+      const next = updater(prev);
+      const logs = makeBoardChangeLogs(prev, next, actorLabel(currentUserName, currentUserEmail), currentUserEmail);
+      if (logs.length === 0) return next;
+      return {
+        ...next,
+        activityLogs: trimActivityLogs([...(asArray(next.activityLogs).length ? asArray(next.activityLogs) : asArray(prev.activityLogs)), ...logs]),
+      };
+    };
+    if (onPatchBoard) {
+      onPatchBoard(board.id, withActivity);
+      return;
+    }
+    onUpdate(withActivity(board));
+  };
+
+  const mergeFilteredGroupUpdate = (visibleGroup, updatedVisibleGroup) => {
+    patchBoard(prev => ({
+      ...prev,
+      groups: prev.groups.map(currentGroup => {
+        if (currentGroup.id !== updatedVisibleGroup.id) return currentGroup;
+
+        const visibleIdsBeforeUpdate = new Set(asArray(visibleGroup.items).map(item => item.id));
+        const updatedVisibleItemsById = new Map(asArray(updatedVisibleGroup.items).map(item => [item.id, item]));
+        const currentItemIds = new Set(asArray(currentGroup.items).map(item => item.id));
+
+        const keptExistingItems = asArray(currentGroup.items)
+          .filter(item => !visibleIdsBeforeUpdate.has(item.id) || updatedVisibleItemsById.has(item.id))
+          .map(item => updatedVisibleItemsById.get(item.id) || item);
+
+        const addedItems = asArray(updatedVisibleGroup.items).filter(item => !currentItemIds.has(item.id));
+
+        return {
+          ...currentGroup,
+          ...updatedVisibleGroup,
+          items: [...keptExistingItems, ...addedItems],
+        };
+      }),
+    }));
+  };
+
+  const mergeFilteredBoardUpdate = (visibleBeforeUpdate, updatedVisibleBoard) => {
+    patchBoard(prev => ({
+      ...prev,
+      ...updatedVisibleBoard,
+      groups: prev.groups.map(currentGroup => {
+        const visibleGroup = asArray(visibleBeforeUpdate.groups).find(g => g.id === currentGroup.id);
+        const updatedVisibleGroup = asArray(updatedVisibleBoard.groups).find(g => g.id === currentGroup.id);
+        if (!visibleGroup || !updatedVisibleGroup) return currentGroup;
+
+        const visibleIdsBeforeUpdate = new Set(asArray(visibleGroup.items).map(item => item.id));
+        const updatedVisibleItemsById = new Map(asArray(updatedVisibleGroup.items).map(item => [item.id, item]));
+
+        return {
+          ...currentGroup,
+          ...updatedVisibleGroup,
+          items: asArray(currentGroup.items)
+            .filter(item => !visibleIdsBeforeUpdate.has(item.id) || updatedVisibleItemsById.has(item.id))
+            .map(item => updatedVisibleItemsById.get(item.id) || item),
+        };
+      }),
+    }));
+  };
+
+  const updBoard = patch => patchBoard(prev => ({ ...prev, ...patch }));
+  const updGroup = g => patchBoard(prev => ({ ...prev, groups: prev.groups.map(x => x.id === g.id ? g : x) }));
+  const delGroup = id => patchBoard(prev => ({ ...prev, groups: prev.groups.filter(g => g.id !== id) }));
+  const addGroup = ()  => {
+    if (!canCreateGroup) return;
+    patchBoard(prev => ({
+      ...prev,
+      groups: [
+        ...prev.groups,
+        {
+          id: uid(),
+          name: "New Group",
+          color: GROUP_COLORS[prev.groups.length % GROUP_COLORS.length],
+          members: [],
+          memberRoles: {},
+          invites: [],
+          items: [],
+        },
+      ],
+    }));
+  };
+
+  const ownerOptions = useMemo(() => {
+    const names = board.groups
+      .flatMap(g => g.items.map(i => i.owner))
+      .filter((name): name is string => typeof name === "string" && name.trim().length > 0);
+    return ["All", ...Array.from(new Set<string>(names))].sort((a, b) => a.localeCompare(b));
+  }, [board]);
+  const ownerSlideOptions = ownerOptions.filter(name => name !== "All");
+
+  useEffect(() => {
+    if (ownerSlideOptions.length === 0) {
+      setOwnerSlideIndex(0);
+      return;
+    }
+    if (filterOwner === "All") {
+      setOwnerSlideIndex(0);
+      return;
+    }
+    const idx = ownerSlideOptions.indexOf(filterOwner);
+    if (idx >= 0) setOwnerSlideIndex(idx);
+  }, [filterOwner, ownerSlideOptions]);
 
   const filteredBoard = useMemo(() => ({
     ...board,
@@ -625,10 +2523,11 @@ function BoardView({ board, onUpdate, onCelebrate }) {
       items: g.items.filter(i =>
         (search === "" || i.name.toLowerCase().includes(search.toLowerCase()) || i.owner.toLowerCase().includes(search.toLowerCase())) &&
         (filterStatus === "All" || i.status === filterStatus) &&
-        (filterPriority === "All" || i.priority === filterPriority)
+        (filterPriority === "All" || i.priority === filterPriority) &&
+        (filterOwner === "All" || i.owner === filterOwner)
       ),
     })),
-  }), [board, search, filterStatus, filterPriority]);
+  }), [board, search, filterStatus, filterPriority, filterOwner]);
 
   const allItems = board.groups.flatMap(g => g.items);
   const done = allItems.filter(i => i.status === "Done").length;
@@ -638,19 +2537,68 @@ function BoardView({ board, onUpdate, onCelebrate }) {
     setPanelItem(item);
   }
   function handlePanelUpdate(updated) {
+    if (!panelItem) return;
     const g = board.groups.find(g => g.items.some(i => i.id === updated.id));
+    if (!g) return;
+    const role = normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor");
+    const canEditTask = !normalizedUserEmail || role === "editor";
+    const canEditStatus = canEditTask;
+    const canComment = canEditTask;
+    if (!canEditStatus) return;
+    if (!canEditTask) {
+      const old = g.items.find(i => i.id === updated.id);
+      if (!old) return;
+      const blockedChange =
+        old.name !== updated.name ||
+        old.priority !== updated.priority ||
+        old.owner !== updated.owner ||
+        old.due !== updated.due ||
+        old.start !== updated.start ||
+        old.pmReviewDate !== updated.pmReviewDate ||
+        old.effortHours !== updated.effortHours ||
+        old.reviewBufferDays !== updated.reviewBufferDays ||
+        old.revisionBufferDays !== updated.revisionBufferDays ||
+        JSON.stringify(old.tags) !== JSON.stringify(updated.tags) ||
+        JSON.stringify(old.subtasks) !== JSON.stringify(updated.subtasks);
+      const commentChanged = JSON.stringify(old.comments) !== JSON.stringify(updated.comments);
+      if (blockedChange || (!canComment && commentChanged)) {
+        return;
+      }
+    }
     if (g) updGroup({ ...g, items: g.items.map(i => i.id === updated.id ? updated : i) });
     setPanelItem(updated);
   }
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {panelItem && <TaskPanel item={panelItem} onUpdate={handlePanelUpdate} onClose={() => setPanelItem(null)} />}
+      {activityOpen && <ActivityLogPanel logs={board.activityLogs} onClose={() => setActivityOpen(false)} />}
+      {panelItem && (
+        <TaskPanel
+          item={panelItem}
+          onUpdate={handlePanelUpdate}
+          onClose={() => setPanelItem(null)}
+          currentUserName={currentUserName}
+          canEditTask={!normalizedUserEmail || (() => {
+            const g = board.groups.find(gr => gr.items.some(i => i.id === panelItem.id));
+            return !g || normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") === "editor";
+          })()}
+          canEditStatus={!normalizedUserEmail || (() => {
+            const g = board.groups.find(gr => gr.items.some(i => i.id === panelItem.id));
+            return !g || normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") === "editor";
+          })()}
+          canComment={!normalizedUserEmail || (() => {
+            const g = board.groups.find(gr => gr.items.some(i => i.id === panelItem.id));
+            return !g || normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") === "editor";
+          })()}
+        />
+      )}
 
       {/* Top bar */}
       <div style={{ background: "#fff", borderBottom: "1px solid #e6e9ef", padding: "12px 28px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ width: 14, height: 14, borderRadius: 4, background: board.color, flexShrink: 0 }} />
-        <InlineEdit value={board.name} onChange={v => updBoard({ name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338" }} />
+        {canEditBoard
+          ? <InlineEdit value={board.name} onChange={v => updBoard({ name: v })} style={{ fontSize: 18, fontWeight: 700, color: "#323338" }} />
+          : <span style={{ fontSize: 18, fontWeight: 700, color: "#323338" }}>{board.name}</span>}
         <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
           <span style={{ background: "#e6f9f1", color: "#00c875", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{done} done</span>
           {stuck > 0 && <span style={{ background: "#fde8ec", color: "#e2445c", fontSize: 11, fontWeight: 700, borderRadius: 20, padding: "2px 10px" }}>{stuck} stuck</span>}
@@ -658,20 +2606,31 @@ function BoardView({ board, onUpdate, onCelebrate }) {
         </div>
         {/* View toggle */}
         <div style={{ display: "flex", gap: 4, marginLeft: "auto", background: "#f6f7fb", borderRadius: 8, padding: 3 }}>
-          {[["table","☰ Table"],["kanban","⬡ Kanban"]].map(([v,label]) => (
+          {[["table","☰ Table"],["kanban","⬡ Kanban"],["calendar","🗓 Calendar"],["workload","👥 Workload"],["planning","🧠 Planning"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{ background: view === v ? "#fff" : "none", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: view === v ? "#0073ea" : "#676879", cursor: "pointer", boxShadow: view === v ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{label}</button>
           ))}
         </div>
-        <button onClick={addGroup} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 20, padding: "7px 18px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}
+        <button onClick={() => setActivityOpen(true)} style={{ background: "#fff", color: "#323338", border: "1px solid #d8dbe4", borderRadius: 20, padding: "7px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Activity</button>
+        <button onClick={addGroup} disabled={!canCreateGroup} style={{ background: canCreateGroup ? "#0073ea" : "#c4cad6", color: "#fff", border: "none", borderRadius: 20, padding: "7px 18px", fontWeight: 700, fontSize: 13, cursor: canCreateGroup ? "pointer" : "not-allowed" }}
           onMouseEnter={e => e.currentTarget.style.background = "#0060c0"}
-          onMouseLeave={e => e.currentTarget.style.background = "#0073ea"}
+          onMouseLeave={e => e.currentTarget.style.background = canCreateGroup ? "#0073ea" : "#c4cad6"}
         >+ New Group</button>
+      </div>
+
+      {/* Keyboard shortcut hint */}
+      <div style={{ background: "#f7f8fc", borderBottom: "1px solid #f0f0f0", padding: "4px 28px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Kanban"],["C","Calendar"],["W","Workload"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
+          <span key={key} style={{ fontSize: 11, color: "#98a1b3", display: "flex", alignItems: "center", gap: 4 }}>
+            <kbd style={{ background: "#fff", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", color: "#323338", boxShadow: "0 1px 2px rgba(0,0,0,.06)" }}>{key}</kbd>
+            {label}
+          </span>
+        ))}
       </div>
 
       {/* Filter bar */}
       <div style={{ background: "#fafbfc", borderBottom: "1px solid #f0f0f0", padding: "8px 28px", display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ fontSize: 13 }}>🔍</span>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tasks or owners…" style={{ border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 10px", fontSize: 13, outline: "none", width: 200 }} />
+        <input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tasks or owners… (press /)" style={{ border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 10px", fontSize: 13, outline: "none", width: 230 }} />
         <span style={{ fontSize: 12, color: "#676879", marginLeft: 8 }}>Status:</span>
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 8px", fontSize: 12, outline: "none", background: "#fff" }}>
           <option>All</option>
@@ -682,29 +2641,219 @@ function BoardView({ board, onUpdate, onCelebrate }) {
           <option>All</option>
           {PRIORITY_OPTIONS.map(p => <option key={p.label}>{p.label}</option>)}
         </select>
-        {(search || filterStatus !== "All" || filterPriority !== "All") && (
-          <button onClick={() => { setSearch(""); setFilterStatus("All"); setFilterPriority("All"); }} style={{ background: "none", border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 10px", fontSize: 12, color: "#676879", cursor: "pointer" }}>Clear</button>
+        <span style={{ fontSize: 12, color: "#676879" }}>Assignee:</span>
+        <select value={filterOwner} onChange={e => setFilterOwner(e.target.value)} style={{ border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 8px", fontSize: 12, outline: "none", background: "#fff" }}>
+          {ownerOptions.map(name => <option key={name}>{name}</option>)}
+        </select>
+        {ownerSlideOptions.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 220 }}>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(ownerSlideOptions.length - 1, 0)}
+              step={1}
+              value={ownerSlideIndex}
+              onChange={e => {
+                const idx = Number(e.target.value);
+                setOwnerSlideIndex(idx);
+                setFilterOwner(ownerSlideOptions[idx]);
+              }}
+              style={{ width: 120 }}
+            />
+            <button onClick={() => setFilterOwner(ownerSlideOptions[ownerSlideIndex])} style={{ border: "1px solid #dbe8ff", background: "#eef4ff", color: "#1f5ecf", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {ownerSlideOptions[ownerSlideIndex]}
+            </button>
+          </div>
+        )}
+        {currentUserName && (
+          <button onClick={() => setFilterOwner(currentUserEmail || currentUserName)} style={{ background: "#eef4ff", border: "1px solid #dbe8ff", borderRadius: 6, padding: "5px 10px", fontSize: 12, color: "#1f5ecf", cursor: "pointer", fontWeight: 700 }}>My Tasks</button>
+        )}
+        {(search || filterStatus !== "All" || filterPriority !== "All" || filterOwner !== "All") && (
+          <button onClick={() => { setSearch(""); setFilterStatus("All"); setFilterPriority("All"); setFilterOwner("All"); }} style={{ background: "none", border: "1px solid #e6e9ef", borderRadius: 6, padding: "5px 10px", fontSize: 12, color: "#676879", cursor: "pointer" }}>Clear</button>
         )}
       </div>
 
       {/* Content */}
       {view === "kanban" ? (
-        <KanbanView board={filteredBoard} onUpdate={onUpdate} onCelebrate={onCelebrate} />
+        <KanbanView board={filteredBoard} onUpdate={updatedVisibleBoard => mergeFilteredBoardUpdate(filteredBoard, updatedVisibleBoard)} onCelebrate={onCelebrate} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
+      ) : view === "calendar" ? (
+        <CalendarTimelineView board={filteredBoard} onOpen={handleOpenItem} />
+      ) : view === "workload" ? (
+        <TeamScheduleView board={filteredBoard} onOpen={handleOpenItem} />
+      ) : view === "planning" ? (
+        <PMPlanningView board={filteredBoard} onOpen={handleOpenItem} />
       ) : (
         <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-          {filteredBoard.groups.length === 0 || filteredBoard.groups.every(g => g.items.length === 0 && board.groups.find(bg => bg.id === g.id)?.items.length === 0) ? (
+          {board.groups.length === 0 ? (
             <div style={{ textAlign: "center", paddingTop: 80, color: "#c4c4c4" }}>
               <div style={{ fontSize: 48 }}>📋</div>
               <div style={{ fontSize: 16, fontWeight: 600, marginTop: 12 }}>No groups yet</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>Click "+ New Group" to get started.</div>
+              <button
+                onClick={addGroup}
+                disabled={!canCreateGroup}
+                style={{ marginTop: 14, border: "none", borderRadius: 8, background: canCreateGroup ? "#0073ea" : "#c4cad6", color: "#fff", fontSize: 12, fontWeight: 700, padding: "8px 14px", cursor: canCreateGroup ? "pointer" : "not-allowed" }}
+              >
+                Create first group
+              </button>
             </div>
           ) : (
             filteredBoard.groups.map(g => (
-              <Group key={g.id} group={g} onUpdate={updGroup} onDelete={() => delGroup(g.id)} onCelebrate={onCelebrate} onOpenItem={handleOpenItem} />
+              <Group key={g.id} group={g} onUpdate={updatedVisibleGroup => mergeFilteredGroupUpdate(g, updatedVisibleGroup)} onDelete={() => delGroup(g.id)} onCelebrate={onCelebrate} onOpenItem={handleOpenItem} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
             ))
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Global Search ────────────────────────────────────────────────────────────
+
+function GlobalSearch({ boards, onNavigate, onClose }: { boards: any[]; onNavigate: (boardId: any, itemId: any) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [selected, setSelected] = useState(0);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const out: { boardId: any; boardName: string; boardColor: string; groupName: string; groupColor: string; item: any }[] = [];
+    for (const board of boards) {
+      for (const group of board.groups) {
+        for (const item of group.items) {
+          const matchName = item.name.toLowerCase().includes(q);
+          const matchOwner = item.owner?.toLowerCase().includes(q);
+          const matchTag = item.tags?.some((t: string) => t.toLowerCase().includes(q));
+          const matchStatus = item.status?.toLowerCase().includes(q);
+          if (matchName || matchOwner || matchTag || matchStatus) {
+            out.push({ boardId: board.id, boardName: board.name, boardColor: board.color, groupName: group.name, groupColor: group.color, item });
+          }
+        }
+      }
+    }
+    return out.slice(0, 30);
+  }, [query, boards]);
+
+  useEffect(() => { setSelected(0); }, [results.length]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); setSelected(s => Math.min(s + 1, results.length - 1)); }
+      if (e.key === "ArrowUp") { e.preventDefault(); setSelected(s => Math.max(s - 1, 0)); }
+      if (e.key === "Enter" && results[selected]) {
+        onNavigate(results[selected].boardId, results[selected].item.id);
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [results, selected, onNavigate, onClose]);
+
+  const highlight = (text: string, q: string) => {
+    if (!q) return text;
+    const idx = text.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return text;
+    return <>{text.slice(0, idx)}<mark style={{ background: "#fff3b0", borderRadius: 2, padding: "0 1px" }}>{text.slice(idx, idx + q.length)}</mark>{text.slice(idx + q.length)}</>;
+  };
+
+  const statusColor = (s: string) => STATUS_OPTIONS.find(o => o.label === s)?.color || "#aaa";
+  const priorityColor = (p: string) => PRIORITY_OPTIONS.find(o => o.label === p)?.color || "#aaa";
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,15,35,.55)", zIndex: 9000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 80 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: "min(680px, 95vw)", background: "#fff", borderRadius: 16, boxShadow: "0 24px 64px rgba(0,0,0,.28)", border: "1px solid #e6e9ef", overflow: "hidden", animation: "fadeIn .15s ease" }}>
+        {/* Search input */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid #f0f0f0" }}>
+          <span style={{ fontSize: 18, color: "#aaa" }}>🔍</span>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search tasks, owners, tags across all boards…"
+            style={{ flex: 1, border: "none", outline: "none", fontSize: 16, color: "#323338", background: "transparent" }}
+          />
+          {query && <button onClick={() => setQuery("")} style={{ border: "none", background: "none", color: "#aaa", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>}
+          <kbd style={{ border: "1px solid #dde1ec", borderRadius: 5, padding: "2px 7px", fontSize: 11, color: "#676879", background: "#f7f8fc", fontFamily: "monospace" }}>Esc</kbd>
+        </div>
+
+        {/* Results */}
+        <div style={{ maxHeight: 420, overflowY: "auto" }}>
+          {query.trim() === "" ? (
+            <div style={{ padding: "32px 20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🌐</div>
+              Type to search across all boards
+            </div>
+          ) : results.length === 0 ? (
+            <div style={{ padding: "32px 20px", textAlign: "center", color: "#aaa", fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>😶</div>
+              No tasks found for "<strong>{query}</strong>"
+            </div>
+          ) : (
+            <>
+              <div style={{ padding: "6px 18px 2px", fontSize: 11, color: "#98a1b3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                {results.length} result{results.length !== 1 ? "s" : ""}
+              </div>
+              {results.map((r, i) => {
+                const overdue = isOverdue(r.item.due) && r.item.status !== "Done";
+                const soon = isDueSoon(r.item.due) && r.item.status !== "Done" && !overdue;
+                return (
+                  <button
+                    key={`${r.boardId}-${r.item.id}`}
+                    onClick={() => { onNavigate(r.boardId, r.item.id); onClose(); }}
+                    onMouseEnter={() => setSelected(i)}
+                    style={{ width: "100%", display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 18px", border: "none", background: i === selected ? "#f0f4ff" : "#fff", cursor: "pointer", textAlign: "left", borderBottom: "1px solid #f7f8fc", transition: "background .1s" }}
+                  >
+                    {/* Board color dot */}
+                    <div style={{ marginTop: 4, width: 10, height: 10, borderRadius: "50%", background: r.boardColor, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Task name */}
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {highlight(r.item.name, query.trim())}
+                      </div>
+                      {/* Breadcrumb */}
+                      <div style={{ fontSize: 11, color: "#98a1b3", marginTop: 2 }}>
+                        <span style={{ color: r.boardColor, fontWeight: 700 }}>{r.boardName}</span>
+                        <span style={{ margin: "0 4px" }}>›</span>
+                        <span style={{ color: r.groupColor, fontWeight: 600 }}>{r.groupName}</span>
+                      </div>
+                      {/* Tags */}
+                      {r.item.tags?.length > 0 && (
+                        <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+                          {r.item.tags.map((t: string) => <TagPill key={t} label={t} />)}
+                        </div>
+                      )}
+                    </div>
+                    {/* Meta: status, priority, due */}
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
+                      <span style={{ background: statusColor(r.item.status), color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{r.item.status}</span>
+                      <span style={{ background: priorityColor(r.item.priority), color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{r.item.priority}</span>
+                      {r.item.due && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: overdue ? "#e2445c" : soon ? "#d4900a" : "#aaa" }}>
+                          {overdue ? "⚠ " : soon ? "⏰ " : "📅 "}{r.item.due}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div style={{ padding: "8px 18px", background: "#fafbff", borderTop: "1px solid #f0f0f0", display: "flex", gap: 14, fontSize: 11, color: "#aaa" }}>
+          {[["↑↓","Navigate"],["↵","Open task"],["Esc","Close"]].map(([k, l]) => (
+            <span key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <kbd style={{ border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontFamily: "monospace", fontSize: 10, color: "#676879", background: "#fff" }}>{k}</kbd>{l}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -724,11 +2873,19 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
   }
 
   return (
-    <div style={{ width: open ? 220 : 44, background: "#1f1f3b", display: "flex", flexDirection: "column", transition: "width .2s", flexShrink: 0, overflow: "hidden" }}>
+    <div style={{ width: open ? 220 : 44, background: "#1f1f3b", display: "flex", flexDirection: "column", transition: "width .2s", flexShrink: 0, overflow: "hidden", position: "relative" }}>
+      <button
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(v => !v); }}
+        title={open ? "Hide sidebar" : "Show sidebar"}
+        aria-label={open ? "Hide sidebar" : "Show sidebar"}
+        style={{ position: "absolute", top: 10, right: 6, minWidth: 28, height: 28, borderRadius: 8, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.12)", color: "rgba(255,255,255,.85)", cursor: "pointer", fontSize: 12, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2, padding: open ? "0 8px" : 0 }}
+      >
+        {open ? "Hide" : "›"}
+      </button>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 10px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
         <div style={{ width: 26, height: 26, borderRadius: 8, background: "#e2445c", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 900, fontSize: 14, flexShrink: 0 }}>H</div>
         {open && <span style={{ color: "#fff", fontWeight: 800, fontSize: 17, letterSpacing: -0.5 }}>HOLIFRIDAY</span>}
-        <button onClick={() => setOpen(v => !v)} style={{ marginLeft: "auto", background: "none", border: "none", color: "rgba(255,255,255,.3)", cursor: "pointer", fontSize: 16, flexShrink: 0 }}>{open ? "‹" : "›"}</button>
+        <div style={{ marginLeft: "auto", width: 30, height: 1 }} />
       </div>
 
       {/* Nav */}
@@ -779,30 +2936,298 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
-export default function App() {
+function AppContent() {
   useEffect(() => { document.title = "HOLIFRIDAY"; }, []);
-  const [boards, setBoards] = useLocalStorage("holifriday_boards", INITIAL_BOARDS);
+  const [authUser, setAuthUser] = useState(null);
+  const [authReady, setAuthReady] = useState(() => {
+    // If no firebase auth configured, skip waiting
+    if (!firebaseAuth) return true;
+    // Set a 5s max wait so auth check never blocks forever
+    return false;
+  });
+  const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid);
   const [activeId, setActiveId] = useState(INITIAL_BOARDS[0].id);
   const [activeView, setActiveView] = useState("boards"); // boards | dashboard
+  const [inviteToken, setInviteToken] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("invite") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [inviteBanner, setInviteBanner] = useState("");
+  const [assignBanner, setAssignBanner] = useState<{ id: number; text: string } | null>(null);
+  const assignReadyRef = useRef(false);
   const { cel, celebrate } = useCelebration();
+  const [dark, setDark] = useLocalStorage("holifriday_dark", false);
+  const [dueBanner, setDueBanner] = useState<string[]>([]);
 
   const activeBoard = boards.find(b => b.id === activeId) || boards[0];
+  const inviteTarget = useMemo(() => resolveInviteTarget(boards, inviteToken), [boards, inviteToken]);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [jumpItemId, setJumpItemId] = useState<any>(null);
+
+  // Cmd+K / Ctrl+K opens global search
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setGlobalSearchOpen(v => !v); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  function handleGlobalNavigate(boardId: any, itemId: any) {
+    setActiveId(boardId);
+    setActiveView("boards");
+    setJumpItemId(itemId);
+  }
+
+  // Due-date notification: show banner for overdue + due-soon tasks on load
+  useEffect(() => {
+    if (!boardsFirebaseLoaded || !authUser?.email) return;
+    const email = normalizeEmail(authUser.email);
+    const allItems = boards.flatMap((b: any) => b.groups.flatMap((g: any) => g.items));
+    const mine = allItems.filter((i: any) => normalizeEmail(i.owner) === email && i.status !== "Done");
+    const overdue = mine.filter((i: any) => isOverdue(i.due));
+    const soon    = mine.filter((i: any) => isDueSoon(i.due) && !isOverdue(i.due));
+    const msgs: string[] = [];
+    if (overdue.length > 0) msgs.push(`⚠️ ${overdue.length} task${overdue.length > 1 ? "s" : ""} assigned to you ${overdue.length > 1 ? "are" : "is"} overdue!`);
+    if (soon.length > 0)    msgs.push(`⏰ ${soon.length} task${soon.length > 1 ? "s" : ""} assigned to you ${soon.length > 1 ? "are" : "is"} due within 2 days.`);
+    if (msgs.length > 0) setDueBanner(msgs);
+  }, [boardsFirebaseLoaded, boards, authUser?.email]);
+  const debugEnabled = !!inviteToken || new URLSearchParams(window.location.search).get("debug") === "1";
   const updateBoard = updated => setBoards(bs => bs.map(b => b.id === updated.id ? updated : b));
+  const patchBoardById = (boardId, updater) => {
+    setBoards(bs => bs.map(b => (b.id === boardId ? updater(b) : b)));
+  };
   const addBoard = name => {
-    const nb = { id: uid(), name, color: GROUP_COLORS[boards.length % GROUP_COLORS.length], groups: [] };
-    setBoards(bs => [...bs, nb]); setActiveId(nb.id);
+    const color = GROUP_COLORS[boards.length % GROUP_COLORS.length];
+    const nb = {
+      id: uid(),
+      name,
+      color,
+      groups: [{ id: uid(), name: "General", color, members: [], memberRoles: {}, invites: [], items: [] }],
+      activityLogs: [],
+    };
+    setBoards(bs => [...bs, nb]);
+    setActiveId(nb.id);
+    setActiveView("boards");
   };
 
+  useEffect(() => {
+    if (!firebaseAuth) return;
+    // Safety timeout: if Firebase auth doesn't respond in 6s, proceed
+    const authTimeout = setTimeout(() => setAuthReady(true), 6000);
+    const unsub = onAuthStateChanged(firebaseAuth, user => {
+      clearTimeout(authTimeout);
+      setAuthUser(user);
+      setAuthReady(true);
+    });
+    return () => { clearTimeout(authTimeout); unsub(); };
+  }, []);
+
+  async function logout() {
+    if (!firebaseAuth) return;
+    await signOut(firebaseAuth);
+  }
+
+  function clearInviteQuery() {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("invite");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    } catch {}
+  }
+
+  // Auto-accept invite only after Firebase has loaded data for THIS specific logged-in user.
+  // boardsLoadedUid must equal authUser.uid to prevent firing with stale pre-login data.
+  useEffect(() => {
+    if (!boardsFirebaseLoaded || !authUser || !inviteToken) return;
+    if (boardsLoadedUid !== authUser.uid) return;
+    doAcceptInvite();
+  }, [boardsFirebaseLoaded, authUser?.uid, inviteToken, boardsLoadedUid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!boardsFirebaseLoaded || !authUser?.email) return;
+    const email = normalizeEmail(authUser.email);
+    const storageKey = `holifriday_seen_assign_${memberRoleKey(email)}`;
+    const assigned = boards
+      .flatMap(board => board.groups.flatMap(group => group.items.map(item => ({ board, group, item }))))
+      .filter(({ item }) => normalizeEmail(item.owner) === email)
+      .map(({ board, group, item }) => ({
+        key: `${board.id}:${group.id}:${item.id}:${email}`,
+        taskName: item.name,
+      }));
+
+    const seen = (() => {
+      try {
+        return new Set<string>(JSON.parse(localStorage.getItem(storageKey) || "[]"));
+      } catch {
+        return new Set<string>();
+      }
+    })();
+
+    if (!assignReadyRef.current) {
+      try { localStorage.setItem(storageKey, JSON.stringify(assigned.map(a => a.key))); } catch {}
+      assignReadyRef.current = true;
+      return;
+    }
+
+    const fresh = assigned.filter(a => !seen.has(a.key));
+    if (fresh.length > 0) {
+      setAssignBanner({ id: Date.now(), text: `You were assigned: \"${fresh[0].taskName}\"` });
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...seen, ...fresh.map(f => f.key)]));
+      } catch {}
+    }
+  }, [boardsFirebaseLoaded, boards, authUser?.email]);
+
+  function doAcceptInvite() {
+    if (!inviteTarget) {
+      setInviteBanner("Invite link is invalid or expired.");
+      setInviteToken("");
+      clearInviteQuery();
+      return;
+    }
+
+    const acceptedEmail = normalizeEmail(authUser?.email);
+    setBoards(prevBoards => prevBoards.map(board => {
+      if (board.id !== inviteTarget.boardId) return board;
+      return {
+        ...board,
+        groups: board.groups.map(group => {
+          if (group.id !== inviteTarget.groupId) return group;
+          return {
+            ...group,
+            members: uniqueStrings([...(group.members || []), acceptedEmail]),
+            memberRoles: {
+              ...(group.memberRoles || {}),
+              [memberRoleKey(acceptedEmail)]: normalizeRole(inviteTarget.role),
+            },
+            invites: asArray(group.invites).filter(inv => inv.token !== inviteTarget.token),
+          };
+        }),
+      };
+    }));
+    setActiveId(inviteTarget.boardId);
+    setActiveView("boards");
+    setInviteBanner(`Joined "${inviteTarget.groupName}" on "${inviteTarget.boardName}"!`);
+    setInviteToken("");
+    clearInviteQuery();
+  }
+
+  if (!firebaseAuth) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(140deg, #eef3ff 0%, #f8f4ff 42%, #fff4f1 100%)", padding: 16 }}>
+        <div style={{ maxWidth: 520, background: "#fff", borderRadius: 16, border: "1px solid #eceef5", boxShadow: "0 10px 30px rgba(0,0,0,.1)", padding: 24 }}>
+          <div style={{ fontWeight: 900, fontSize: 22, color: "#1f1f3b" }}>Login is not ready yet</div>
+          <div style={{ marginTop: 8, color: "#676879", fontSize: 13, lineHeight: 1.6 }}>
+            Please configure Firebase first, especially VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID, and VITE_FIREBASE_DATABASE_URL.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authReady) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#676879", background: "#f7f8fc" }}>
+        Checking authentication...
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return <AuthGate />;
+  }
+
+  if (!boardsFirebaseLoaded) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#676879", background: "#f7f8fc", padding: 16 }}>
+        <div style={{ width: "100%", maxWidth: 760, background: "#fff", border: "1px solid #eceef5", borderRadius: 16, boxShadow: "0 10px 30px rgba(0,0,0,.08)", padding: 20 }}>
+          <div style={{ fontWeight: 800, color: "#1f1f3b" }}>Loading boards...</div>
+          {debugEnabled && (
+            <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: "#fff9e6", border: "1px solid #ffe08a", fontSize: 12, color: "#7a5b00", lineHeight: 1.6 }}>
+              <div><strong>Firebase project:</strong> {firebaseDebugInfo.projectId || "(missing)"}</div>
+              <div><strong>Database URL:</strong> {firebaseDebugInfo.databaseURL || "(missing)"}</div>
+              <div><strong>Auth domain:</strong> {firebaseDebugInfo.authDomain || "(missing)"}</div>
+              <div><strong>Has Firebase config:</strong> {String(firebaseDebugInfo.hasFirebaseConfig)}</div>
+              <div><strong>auth uid:</strong> {authUser?.uid || "(none)"}</div>
+              <div><strong>boardsLoadedUid:</strong> {boardsLoadedUid || "(none)"}</div>
+              <div><strong>inviteToken:</strong> {inviteToken || "(none)"}</div>
+              <div><strong>inviteTarget:</strong> {inviteTarget ? `${inviteTarget.boardName} / ${inviteTarget.groupName}` : "(not found yet)"}</div>
+              <div><strong>load error:</strong> {boardsLoadError || "(none)"}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "'Figtree','Roboto',sans-serif", overflow: "hidden" }}>
-      <style>{`* { box-sizing: border-box; } body { margin: 0; }`}</style>
+    <DarkCtx.Provider value={{ dark, toggle: () => setDark((v: boolean) => !v) }}>
+    <div style={{ display: "flex", height: "100vh", fontFamily: "'Figtree','Roboto',sans-serif", overflow: "hidden", background: dark ? "#0f0f1e" : "#fff", colorScheme: dark ? "dark" : "light" }}>
+      <style>{`* { box-sizing: border-box; } body { margin: 0; } @keyframes mailDropIn { from { opacity: 0; transform: translateY(-18px) translateX(24px) scale(.96); } to { opacity: 1; transform: translateY(0) translateX(0) scale(1); } } @keyframes mailPulse { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2px) scale(1.07); } }`}</style>
       <Confetti show={!!cel} originX={cel?.originX} />
       <Toast show={!!cel} taskName={cel?.taskName} />
+      <AssignmentMailNotice notice={assignBanner} onClose={() => setAssignBanner(null)} />
+      {globalSearchOpen && <GlobalSearch boards={boards} onNavigate={handleGlobalNavigate} onClose={() => setGlobalSearchOpen(false)} />}
       <Sidebar boards={boards} activeId={activeId} activeView={activeView} onSelect={setActiveId} onAdd={addBoard} onChangeView={setActiveView} />
-      {activeView === "dashboard"
-        ? <Dashboard boards={boards} />
-        : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onCelebrate={celebrate} />
-      }
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${dark ? "#2a2a4a" : "#eceef5"}`, background: dark ? "#16213e" : "#fafbff" }}>
+          <div style={{ fontSize: 12, color: dark ? "#8888aa" : "#676879" }}>Signed in as: <strong style={{ color: dark ? "#e0e0f0" : "#323338" }}>{authUser.displayName || authUser.email}</strong> ({authUser.email})</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setGlobalSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, background: dark ? "#1a1a2e" : "#f5f6fb", color: dark ? "#aaa" : "#676879", borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+              <span>🔍</span><span>Search all boards</span>
+              <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
+            </button>
+            {/* Dark mode toggle */}
+            <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
+              {dark ? "☀️" : "🌙"}
+            </button>
+            <button onClick={logout} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Log out</button>
+          </div>
+        </div>
+        {/* Due date personal banner */}
+        {dueBanner.length > 0 && (
+          <div style={{ background: dark ? "#2a1a1a" : "#fff8ec", borderBottom: `1px solid ${dark ? "#4a2a2a" : "#ffe08a"}`, padding: "8px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: 1 }}>
+              {dueBanner.map((msg, i) => <div key={i} style={{ fontSize: 12, fontWeight: 700, color: msg.startsWith("⚠") ? "#e2445c" : "#d4900a" }}>{msg}</div>)}
+            </div>
+            <button onClick={() => { setDueBanner([]); setActiveView("dashboard"); }} style={{ border: "none", background: "#fdab3d", color: "#fff", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>View Dashboard</button>
+            <button onClick={() => setDueBanner([])} style={{ border: "none", background: "none", color: "#aaa", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>×</button>
+          </div>
+        )}
+        {debugEnabled && (
+          <div style={{ padding: "8px 14px", background: "#fff9e6", borderBottom: "1px solid #ffe08a", fontSize: 12, color: "#7a5b00", lineHeight: 1.6 }}>
+            <strong>DEBUG</strong> | project: {firebaseDebugInfo.projectId || "(missing)"} | db: {firebaseDebugInfo.databaseURL || "(missing)"} | uid: {authUser?.uid || "(none)"} | loadedUid: {boardsLoadedUid || "(none)"} | invite: {inviteToken || "(none)"} | target: {inviteTarget ? `${inviteTarget.boardName}/${inviteTarget.groupName}` : "(none)"} | error: {boardsLoadError || "(none)"}
+          </div>
+        )}
+        {inviteBanner && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", background: /Joined/i.test(inviteBanner) ? "#eafff3" : "#fff4f4", borderBottom: "1px solid #dfe9ff" }}>
+            <div style={{ fontSize: 12, color: /Joined/i.test(inviteBanner) ? "#00875a" : "#e2445c", fontWeight: 700 }}>{inviteBanner}</div>
+            <button onClick={() => setInviteBanner("")} style={{ border: "none", background: "none", color: "#aaa", fontSize: 14, cursor: "pointer" }}>×</button>
+          </div>
+        )}
+        {inviteToken && !boardsFirebaseLoaded && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", background: "#eef4ff", borderBottom: "1px solid #dfe9ff" }}>
+            <div style={{ fontSize: 12, color: "#1f5ecf", fontWeight: 700 }}>⏳ Joining group, please wait...</div>
+          </div>
+        )}
+        {activeView === "dashboard"
+          ? <Dashboard boards={boards} />
+          : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onPatchBoard={patchBoardById} onCelebrate={celebrate} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} jumpItemId={jumpItemId} onJumpHandled={() => setJumpItemId(null)} />
+        }
+      </div>
     </div>
+    </DarkCtx.Provider>
+  );
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
   );
 }

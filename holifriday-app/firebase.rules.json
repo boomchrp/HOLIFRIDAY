@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "holifriday": {
+      "sharedBoards": {
+        "main": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          "$boardIndex": {
+            ".validate": "newData.hasChildren(['id', 'name', 'color', 'groups'])"
+          }
+        }
+      }
+    }
+  }
+}
