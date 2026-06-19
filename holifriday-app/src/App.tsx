@@ -392,6 +392,7 @@ function detectBoardVersionConflicts(prevBoard, nextBoard, serverBoard) {
         itemName: nextItem.name || serverItem.name || "Untitled task",
         baseVersion,
         serverVersion,
+        base: prevItem,
         mine: nextItem,
         server: serverItem,
       });
@@ -401,7 +402,140 @@ function detectBoardVersionConflicts(prevBoard, nextBoard, serverBoard) {
   return conflicts;
 }
 
-function withMergeActivityLog(board, actorName, actorEmail, strategy, conflicts) {
+function mergeUniqueTags(baseTags, mineTags, serverTags) {
+  const baseSet = new Set(asArray(baseTags));
+  const mineSet = new Set(asArray(mineTags));
+  const serverSet = new Set(asArray(serverTags));
+  const merged = new Set<string>();
+
+  for (const tag of mineSet) if (!baseSet.has(tag) || serverSet.has(tag)) merged.add(tag);
+  for (const tag of serverSet) if (!baseSet.has(tag) || mineSet.has(tag)) merged.add(tag);
+  for (const tag of baseSet) {
+    const mineRemoved = !mineSet.has(tag);
+    const serverRemoved = !serverSet.has(tag);
+    if (!mineRemoved && !serverRemoved) merged.add(tag);
+  }
+  return Array.from(merged);
+}
+
+function mergeSubtasks(baseSubtasks, mineSubtasks, serverSubtasks) {
+  const byId = new Map<any, any>();
+  for (const item of asArray(baseSubtasks)) byId.set(item.id, { ...item });
+
+  for (const item of asArray(serverSubtasks)) {
+    const prev = byId.get(item.id) || {};
+    byId.set(item.id, {
+      ...prev,
+      ...item,
+      done: Boolean(prev.done || item.done),
+    });
+  }
+
+  for (const item of asArray(mineSubtasks)) {
+    const prev = byId.get(item.id) || {};
+    byId.set(item.id, {
+      ...prev,
+      ...item,
+      done: Boolean(prev.done || item.done),
+    });
+  }
+
+  return Array.from(byId.values());
+}
+
+function mergeComments(baseComments, mineComments, serverComments) {
+  const base = asArray(baseComments);
+  const server = asArray(serverComments);
+  const mine = asArray(mineComments);
+
+  const merged: any[] = [];
+  const seen = new Set<any>();
+
+  for (const c of [...base, ...server, ...mine]) {
+    const key = c?.id || `${c?.author || ""}:${c?.time || ""}:${c?.text || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(c);
+  }
+
+  return merged;
+}
+
+function pickLatestByUpdatedAt(mineValue, serverValue, mineUpdatedAt, serverUpdatedAt) {
+  const mineTs = Date.parse(asText(mineUpdatedAt));
+  const serverTs = Date.parse(asText(serverUpdatedAt));
+  if (Number.isNaN(mineTs) && Number.isNaN(serverTs)) return mineValue;
+  if (Number.isNaN(serverTs)) return mineValue;
+  if (Number.isNaN(mineTs)) return serverValue;
+  return mineTs >= serverTs ? mineValue : serverValue;
+}
+
+function smartMergeTask(conflict, actorEmail) {
+  const base = conflict?.base || {};
+  const mine = conflict?.mine || {};
+  const server = conflict?.server || {};
+  const merged = { ...server };
+  const candidateFields = Array.from(new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(server)]));
+
+  for (const field of candidateFields) {
+    if (["version", "updatedAt", "updatedBy", "id"].includes(field)) continue;
+
+    const baseVal = base[field];
+    const mineVal = mine[field];
+    const serverVal = server[field];
+    const mineChanged = !sameJson(baseVal, mineVal);
+    const serverChanged = !sameJson(baseVal, serverVal);
+
+    if (mineChanged && !serverChanged) {
+      merged[field] = mineVal;
+      continue;
+    }
+    if (!mineChanged && serverChanged) {
+      merged[field] = serverVal;
+      continue;
+    }
+    if (!mineChanged && !serverChanged) {
+      merged[field] = serverVal;
+      continue;
+    }
+
+    if (field === "tags") {
+      merged[field] = mergeUniqueTags(baseVal, mineVal, serverVal);
+      continue;
+    }
+    if (field === "subtasks") {
+      merged[field] = mergeSubtasks(baseVal, mineVal, serverVal);
+      continue;
+    }
+    if (field === "comments") {
+      merged[field] = mergeComments(baseVal, mineVal, serverVal);
+      continue;
+    }
+    if (field === "status") {
+      merged[field] = pickLatestByUpdatedAt(mineVal, serverVal, mine.updatedAt, server.updatedAt);
+      continue;
+    }
+    if (field === "due" || field === "pmReviewDate") {
+      const mineDate = parseDateOnly(mineVal);
+      const serverDate = parseDateOnly(serverVal);
+      if (mineDate && serverDate) merged[field] = mineDate <= serverDate ? mineVal : serverVal;
+      else merged[field] = mineVal || serverVal || "";
+      continue;
+    }
+
+    merged[field] = mineVal;
+  }
+
+  const serverVersion = Number.isFinite(Number(server?.version)) && Number(server?.version) > 0 ? Number(server.version) : 1;
+  return {
+    ...merged,
+    version: serverVersion + 1,
+    updatedAt: new Date().toISOString(),
+    updatedBy: normalizeEmail(actorEmail),
+  };
+}
+
+function withMergeActivityLog(board, actorName, actorEmail, strategy: "mine" | "server" | "smart", conflicts) {
   const entries = asArray(conflicts).map(conflict => createActivityLog({
     actorName,
     actorEmail,
@@ -3068,7 +3202,7 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
-function MergeConflictDialog({ conflict, onUseMine, onUseServer, onCancel }: { conflict: any; onUseMine: () => void; onUseServer: () => void; onCancel: () => void }) {
+function MergeConflictDialog({ conflict, onUseMine, onUseServer, onUseSmart, onCancel }: { conflict: any; onUseMine: () => void; onUseServer: () => void; onUseSmart: () => void; onCancel: () => void }) {
   if (!conflict) return null;
 
   return (
@@ -3101,6 +3235,7 @@ function MergeConflictDialog({ conflict, onUseMine, onUseServer, onCancel }: { c
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "12px 18px", borderTop: "1px solid #eceef5", background: "#fafbff" }}>
           <button onClick={onCancel} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#676879", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onUseSmart} style={{ border: "1px solid #dbe8ff", background: "#eef4ff", color: "#1f5ecf", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Smart Merge (field-level)</button>
             <button onClick={onUseServer} style={{ border: "1px solid #e4b5c2", background: "#fff", color: "#b12a48", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Use Server Version</button>
             <button onClick={onUseMine} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Use My Changes</button>
           </div>
@@ -3275,7 +3410,7 @@ function AppContent() {
     applyBoardPatch(boardId, updater);
   };
 
-  const resolveMergeConflict = (strategy: "mine" | "server") => {
+  const resolveMergeConflict = (strategy: "mine" | "server" | "smart") => {
     if (!mergeConflict) return;
     const now = new Date().toISOString();
     const conflictMap = new Map(asArray(mergeConflict.conflicts).map(c => [c.key, c]));
@@ -3283,6 +3418,20 @@ function AppContent() {
     let resolvedBoard = mergeConflict.localNextBoard;
     if (strategy === "server") {
       resolvedBoard = mergeConflict.serverBoard;
+    } else if (strategy === "smart") {
+      const conflictMap = new Map(asArray(mergeConflict.conflicts).map(c => [c.key, c]));
+      resolvedBoard = {
+        ...mergeConflict.serverBoard,
+        groups: asArray(mergeConflict.serverBoard.groups).map(group => ({
+          ...group,
+          items: asArray(group.items).map(item => {
+            const key = `${group.id}:${item.id}`;
+            const conflict = conflictMap.get(key);
+            if (!conflict) return item;
+            return smartMergeTask(conflict, mergeConflict.actorEmail);
+          }),
+        })),
+      };
     } else {
       const serverMaps = boardItemMaps(mergeConflict.serverBoard);
       resolvedBoard = {
@@ -3499,6 +3648,7 @@ function AppContent() {
         conflict={mergeConflict}
         onUseMine={() => resolveMergeConflict("mine")}
         onUseServer={() => resolveMergeConflict("server")}
+        onUseSmart={() => resolveMergeConflict("smart")}
         onCancel={() => setMergeConflict(null)}
       />
       <Confetti show={!!cel} originX={cel?.originX} />
