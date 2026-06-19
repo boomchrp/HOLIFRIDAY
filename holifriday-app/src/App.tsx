@@ -1,7 +1,7 @@
 import React, { Component, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { getSupabase, hasSupabaseConfig } from "./lib/supabase";
 import { firebaseDb, firebaseAuth, firebaseDebugInfo } from "./lib/firebase";
-import { ref as dbRef, onValue, set } from "firebase/database";
+import { ref as dbRef, get, onValue, set } from "firebase/database";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -42,6 +42,7 @@ const PRIORITY_OPTIONS = [
   { label: "Low",      color: "#c4c4c4" },
 ];
 const SIGNUPS_TABLE = "user_signups";
+const SHARED_BOARDS_PATH = "holifriday/sharedBoards/main";
 
 const INITIAL_BOARDS = [
   {
@@ -272,6 +273,8 @@ function resolveInviteTarget(boards, token) {
 function normalizeTask(task, index) {
   const validStatus = STATUS_OPTIONS.some(s => s.label === task?.status) ? task.status : "Not Started";
   const validPriority = PRIORITY_OPTIONS.some(p => p.label === task?.priority) ? task.priority : "Medium";
+  const version = Number.isFinite(Number(task?.version)) && Number(task?.version) > 0 ? Number(task?.version) : 1;
+  const updatedAt = asText(task?.updatedAt, new Date().toISOString());
 
   return {
     id: task?.id ?? uid(),
@@ -294,6 +297,127 @@ function normalizeTask(task, index) {
       name: asText(s?.name, `Subtask ${i + 1}`),
       done: !!s?.done,
     })),
+    version,
+    updatedAt,
+    updatedBy: normalizeEmail(task?.updatedBy),
+  };
+}
+
+function stripTaskMeta(task) {
+  if (!task || typeof task !== "object") return task;
+  const { version, updatedAt, updatedBy, ...rest } = task as any;
+  return rest;
+}
+
+function didTaskContentChange(prevTask, nextTask) {
+  return !sameJson(stripTaskMeta(prevTask), stripTaskMeta(nextTask));
+}
+
+function boardItemMaps(board) {
+  const byGroupAndItem = new Map<string, any>();
+  const byItem = new Map<any, any>();
+  for (const group of asArray(board?.groups)) {
+    for (const item of asArray(group?.items)) {
+      byGroupAndItem.set(`${group.id}:${item.id}`, item);
+      byItem.set(item.id, item);
+    }
+  }
+  return { byGroupAndItem, byItem };
+}
+
+function stampBoardTaskMetadata(prevBoard, nextBoard, actorEmail) {
+  const now = new Date().toISOString();
+  const prevMaps = boardItemMaps(prevBoard);
+  const normalizedActor = normalizeEmail(actorEmail);
+
+  return {
+    ...nextBoard,
+    groups: asArray(nextBoard?.groups).map(group => ({
+      ...group,
+      items: asArray(group?.items).map(item => {
+        const key = `${group.id}:${item.id}`;
+        const prevItem = prevMaps.byGroupAndItem.get(key) || prevMaps.byItem.get(item.id);
+        const prevVersion = Number.isFinite(Number(prevItem?.version)) && Number(prevItem?.version) > 0 ? Number(prevItem.version) : 1;
+
+        if (!prevItem) {
+          return {
+            ...item,
+            version: Number.isFinite(Number(item?.version)) && Number(item?.version) > 0 ? Number(item.version) : 1,
+            updatedAt: asText(item?.updatedAt, now),
+            updatedBy: normalizeEmail(item?.updatedBy) || normalizedActor,
+          };
+        }
+
+        if (didTaskContentChange(prevItem, item)) {
+          return {
+            ...item,
+            version: prevVersion + 1,
+            updatedAt: now,
+            updatedBy: normalizedActor,
+          };
+        }
+
+        return {
+          ...item,
+          version: Number.isFinite(Number(item?.version)) && Number(item?.version) > 0 ? Number(item.version) : prevVersion,
+          updatedAt: asText(item?.updatedAt, prevItem?.updatedAt || now),
+          updatedBy: normalizeEmail(item?.updatedBy) || normalizeEmail(prevItem?.updatedBy),
+        };
+      }),
+    })),
+  };
+}
+
+function detectBoardVersionConflicts(prevBoard, nextBoard, serverBoard) {
+  const prevMaps = boardItemMaps(prevBoard);
+  const nextMaps = boardItemMaps(nextBoard);
+  const serverMaps = boardItemMaps(serverBoard);
+  const conflicts: any[] = [];
+
+  for (const [key, nextItem] of nextMaps.byGroupAndItem) {
+    const prevItem = prevMaps.byGroupAndItem.get(key) || prevMaps.byItem.get(nextItem.id);
+    if (!prevItem) continue;
+    if (!didTaskContentChange(prevItem, nextItem)) continue;
+
+    const serverItem = serverMaps.byGroupAndItem.get(key) || serverMaps.byItem.get(nextItem.id);
+    if (!serverItem) continue;
+
+    const baseVersion = Number.isFinite(Number(prevItem?.version)) && Number(prevItem?.version) > 0 ? Number(prevItem.version) : 1;
+    const serverVersion = Number.isFinite(Number(serverItem?.version)) && Number(serverItem?.version) > 0 ? Number(serverItem.version) : 1;
+
+    if (serverVersion !== baseVersion) {
+      conflicts.push({
+        key,
+        itemId: nextItem.id,
+        itemName: nextItem.name || serverItem.name || "Untitled task",
+        baseVersion,
+        serverVersion,
+        mine: nextItem,
+        server: serverItem,
+      });
+    }
+  }
+
+  return conflicts;
+}
+
+function withMergeActivityLog(board, actorName, actorEmail, strategy, conflicts) {
+  const entries = asArray(conflicts).map(conflict => createActivityLog({
+    actorName,
+    actorEmail,
+    boardId: board.id,
+    itemId: conflict.itemId,
+    itemName: conflict.itemName,
+    action: "merge_resolved",
+    field: "version",
+    oldValue: `server:v${conflict.serverVersion}`,
+    newValue: `${strategy}:v${Number(conflict.serverVersion) + (strategy === "mine" ? 1 : 0)}`,
+  }));
+
+  if (entries.length === 0) return board;
+  return {
+    ...board,
+    activityLogs: trimActivityLogs([...(asArray(board.activityLogs)), ...entries]),
   };
 }
 
@@ -375,7 +499,7 @@ function useLocalStorage(key, init) {
 }
 
 function useSyncedBoards(key, init, uid) {
-  const dbPath = firebaseDb ? "holifriday/sharedBoards/main" : null;
+  const dbPath = firebaseDb ? SHARED_BOARDS_PATH : null;
   const [val, setVal] = useState<typeof init | null>(null); // null = not yet loaded from server
   const [loaded, setLoaded] = useState(false);
   const [loadedUid, setLoadedUid] = useState<string | undefined>(undefined);
@@ -2944,6 +3068,48 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
+function MergeConflictDialog({ conflict, onUseMine, onUseServer, onCancel }: { conflict: any; onUseMine: () => void; onUseServer: () => void; onCancel: () => void }) {
+  if (!conflict) return null;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 12000, background: "rgba(11, 20, 44, 0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ width: "min(760px, 96vw)", background: "#fff", borderRadius: 14, border: "1px solid #e6e9ef", boxShadow: "0 16px 50px rgba(0,0,0,.24)", overflow: "hidden" }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid #eceef5", background: "#fff8ec" }}>
+          <div style={{ fontSize: 16, fontWeight: 900, color: "#7a5b00" }}>Version Conflict Detected</div>
+          <div style={{ marginTop: 4, fontSize: 12, color: "#9a7a00" }}>Someone updated these tasks before your save. Choose how to merge this change.</div>
+        </div>
+
+        <div style={{ maxHeight: 360, overflow: "auto", padding: "14px 18px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {asArray(conflict.conflicts).map((item: any) => (
+            <div key={item.key} style={{ border: "1px solid #e6e9ef", borderRadius: 10, padding: 10, background: "#fafbff" }}>
+              <div style={{ fontWeight: 800, color: "#323338", fontSize: 13 }}>{item.itemName}</div>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#676879" }}>Local base v{item.baseVersion} vs Server v{item.serverVersion}</div>
+              <div style={{ marginTop: 7, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div style={{ border: "1px solid #dbe8ff", borderRadius: 8, background: "#eef4ff", padding: "7px 8px" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#1f5ecf", textTransform: "uppercase" }}>Mine</div>
+                  <div style={{ marginTop: 2, fontSize: 12, color: "#1a2d59" }}>{item.mine?.status || "-"} • {item.mine?.owner || "No owner"} • due {item.mine?.due || "-"}</div>
+                </div>
+                <div style={{ border: "1px solid #f6d8df", borderRadius: 8, background: "#fdeef1", padding: "7px 8px" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#b12a48", textTransform: "uppercase" }}>Server</div>
+                  <div style={{ marginTop: 2, fontSize: 12, color: "#5e2234" }}>{item.server?.status || "-"} • {item.server?.owner || "No owner"} • due {item.server?.due || "-"}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "12px 18px", borderTop: "1px solid #eceef5", background: "#fafbff" }}>
+          <button onClick={onCancel} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#676879", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onUseServer} style={{ border: "1px solid #e4b5c2", background: "#fff", color: "#b12a48", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Use Server Version</button>
+            <button onClick={onUseMine} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Use My Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GuestPlanningPreview({ onBackToLogin }: { onBackToLogin: () => void }) {
   const [activePreviewBoardId, setActivePreviewBoardId] = useState(INITIAL_BOARDS[0].id);
   const previewBoard = INITIAL_BOARDS.find(b => b.id === activePreviewBoardId) || INITIAL_BOARDS[0];
@@ -3014,11 +3180,17 @@ function AppContent() {
   const { cel, celebrate } = useCelebration();
   const [dark, setDark] = useLocalStorage("holifriday_dark", false);
   const [dueBanner, setDueBanner] = useState<string[]>([]);
+  const [mergeConflict, setMergeConflict] = useState<any | null>(null);
+  const boardsRef = useRef<any[]>(boards);
 
   const activeBoard = boards.find(b => b.id === activeId) || boards[0];
   const inviteTarget = useMemo(() => resolveInviteTarget(boards, inviteToken), [boards, inviteToken]);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [jumpItemId, setJumpItemId] = useState<any>(null);
+
+  useEffect(() => {
+    boardsRef.current = boards;
+  }, [boards]);
 
   // Cmd+K / Ctrl+K opens global search
   useEffect(() => {
@@ -3049,9 +3221,101 @@ function AppContent() {
     if (msgs.length > 0) setDueBanner(msgs);
   }, [boardsFirebaseLoaded, boards, authUser?.email]);
   const debugEnabled = !!inviteToken || new URLSearchParams(window.location.search).get("debug") === "1";
-  const updateBoard = updated => setBoards(bs => bs.map(b => b.id === updated.id ? updated : b));
+  const applyBoardPatch = async (boardId, updater) => {
+    const actorName = authUser?.displayName || authUser?.email || "Unknown user";
+    const actorEmail = authUser?.email || "";
+    const localPrevBoard = asArray(boardsRef.current).find(b => b.id === boardId);
+    if (!localPrevBoard) return;
+
+    const localNextRaw = updater(localPrevBoard);
+    const localNextBoard = stampBoardTaskMetadata(localPrevBoard, localNextRaw, actorEmail);
+
+    if (!firebaseDb) {
+      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+      return;
+    }
+
+    try {
+      const snap = await get(dbRef(firebaseDb, SHARED_BOARDS_PATH));
+      const serverBoards = normalizeBoards(snap.val(), boardsRef.current);
+      const serverBoard = asArray(serverBoards).find(b => b.id === boardId);
+
+      if (!serverBoard) {
+        setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+        return;
+      }
+
+      const conflicts = detectBoardVersionConflicts(localPrevBoard, localNextBoard, serverBoard);
+      if (conflicts.length > 0) {
+        setMergeConflict({
+          boardId,
+          actorName,
+          actorEmail,
+          localNextBoard,
+          serverBoard,
+          conflicts,
+        });
+        return;
+      }
+
+      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+    } catch (err) {
+      console.warn("Conflict check failed, saving local changes:", err);
+      setBoards(bs => bs.map(b => (b.id === boardId ? localNextBoard : b)));
+    }
+  };
+
+  const updateBoard = updated => {
+    const current = asArray(boardsRef.current).find(b => b.id === updated.id);
+    if (!current) return;
+    applyBoardPatch(updated.id, () => updated);
+  };
+
   const patchBoardById = (boardId, updater) => {
-    setBoards(bs => bs.map(b => (b.id === boardId ? updater(b) : b)));
+    applyBoardPatch(boardId, updater);
+  };
+
+  const resolveMergeConflict = (strategy: "mine" | "server") => {
+    if (!mergeConflict) return;
+    const now = new Date().toISOString();
+    const conflictMap = new Map(asArray(mergeConflict.conflicts).map(c => [c.key, c]));
+
+    let resolvedBoard = mergeConflict.localNextBoard;
+    if (strategy === "server") {
+      resolvedBoard = mergeConflict.serverBoard;
+    } else {
+      const serverMaps = boardItemMaps(mergeConflict.serverBoard);
+      resolvedBoard = {
+        ...mergeConflict.localNextBoard,
+        groups: asArray(mergeConflict.localNextBoard.groups).map(group => ({
+          ...group,
+          items: asArray(group.items).map(item => {
+            const key = `${group.id}:${item.id}`;
+            const conflict = conflictMap.get(key);
+            if (!conflict) return item;
+            const serverItem = serverMaps.byGroupAndItem.get(key) || serverMaps.byItem.get(item.id);
+            const serverVersion = Number.isFinite(Number(serverItem?.version)) && Number(serverItem?.version) > 0 ? Number(serverItem.version) : 1;
+            return {
+              ...item,
+              version: serverVersion + 1,
+              updatedAt: now,
+              updatedBy: normalizeEmail(mergeConflict.actorEmail),
+            };
+          }),
+        })),
+      };
+    }
+
+    const withLog = withMergeActivityLog(
+      resolvedBoard,
+      mergeConflict.actorName,
+      mergeConflict.actorEmail,
+      strategy,
+      mergeConflict.conflicts,
+    );
+
+    setBoards(bs => bs.map(b => (b.id === mergeConflict.boardId ? withLog : b)));
+    setMergeConflict(null);
   };
   const addBoard = name => {
     const color = GROUP_COLORS[boards.length % GROUP_COLORS.length];
@@ -3231,6 +3495,12 @@ function AppContent() {
     <DarkCtx.Provider value={{ dark, toggle: () => setDark((v: boolean) => !v) }}>
     <div style={{ display: "flex", height: "100vh", fontFamily: "'Figtree','Roboto',sans-serif", overflow: "hidden", background: dark ? "#0f0f1e" : "#fff", colorScheme: dark ? "dark" : "light" }}>
       <style>{`* { box-sizing: border-box; } body { margin: 0; } @keyframes mailDropIn { from { opacity: 0; transform: translateY(-18px) translateX(24px) scale(.96); } to { opacity: 1; transform: translateY(0) translateX(0) scale(1); } } @keyframes mailPulse { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2px) scale(1.07); } }`}</style>
+      <MergeConflictDialog
+        conflict={mergeConflict}
+        onUseMine={() => resolveMergeConflict("mine")}
+        onUseServer={() => resolveMergeConflict("server")}
+        onCancel={() => setMergeConflict(null)}
+      />
       <Confetti show={!!cel} originX={cel?.originX} />
       <Toast show={!!cel} taskName={cel?.taskName} />
       <AssignmentMailNotice notice={assignBanner} onClose={() => setAssignBanner(null)} />
