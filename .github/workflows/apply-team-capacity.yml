@@ -1,0 +1,47 @@
+name: Apply Team Capacity Feature
+
+on:
+  push:
+    branches:
+      - improve-firebase-security
+    paths:
+      - tools/apply_team_capacity_feature.py
+      - .github/workflows/apply-team-capacity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-team-capacity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: improve-firebase-security
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply feature patch
+        run: python3 tools/apply_team_capacity_feature.py
+
+      - name: Install and build
+        working-directory: holifriday-app
+        run: |
+          npm install
+          npm run build
+
+      - name: Commit updated App.tsx
+        run: |
+          git config user.name "ChatGPT"
+          git config user.email "actions@github.com"
+          if git diff --quiet holifriday-app/src/App.tsx; then
+            echo "No App.tsx changes to commit."
+            exit 0
+          fi
+          git add holifriday-app/src/App.tsx
+          git commit -m "Add per-person project capacity"
+          git push
