@@ -306,6 +306,7 @@ function normalizeTask(task, index) {
       id: c?.id ?? uid(),
       author: asText(c?.author, "Unknown"),
       text: asText(c?.text, ""),
+      mentions: uniqueStrings([...asArray(c?.mentions), ...extractMentions(c?.text)]),
       time: asText(c?.time, ""),
       _sort: i,
     })).map(({ _sort, ...rest }) => rest),
@@ -314,6 +315,15 @@ function normalizeTask(task, index) {
       name: asText(s?.name, `Subtask ${i + 1}`),
       done: !!s?.done,
     })),
+    approvalHistory: asArray(task?.approvalHistory).map((h, i) => ({
+      id: h?.id ?? uid(),
+      fromStatus: asText(h?.fromStatus || h?.from, "—"),
+      toStatus: asText(h?.toStatus || h?.to || h?.action, "—"),
+      action: asText(h?.action || h?.toStatus || h?.to, "Status changed"),
+      by: asText(h?.by || h?.actor || h?.author, "Unknown"),
+      at: asText(h?.at || h?.time || h?.createdAt, ""),
+      _sort: i,
+    })).map(({ _sort, ...rest }) => rest),
     version,
     updatedAt,
     updatedBy: normalizeEmail(task?.updatedBy),
@@ -1363,6 +1373,33 @@ function AssignmentMailNotice({ notice, onClose }) {
 
 // ─── Tag Pill ─────────────────────────────────────────────────────────────────
 
+
+function extractMentions(text) {
+  const raw = asText(text, "");
+  const matches = raw.match(/@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[A-Za-z0-9._-]+)/g) || [];
+  return uniqueStrings(matches.map(m => m.slice(1).replace(/[),.;:!?]+$/g, "").toLowerCase()).filter(Boolean));
+}
+
+function renderMentionText(text) {
+  const raw = asText(text, "");
+  const parts = raw.split(/(@[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|@[A-Za-z0-9._-]+)/g);
+  return <>{parts.map((part, idx) => part.startsWith("@")
+    ? <span key={idx} style={{ background: "#eef4ff", color: "#0073ea", borderRadius: 4, padding: "0 3px", fontWeight: 800 }}>{part}</span>
+    : <React.Fragment key={idx}>{part}</React.Fragment>
+  )}</>;
+}
+
+function createApprovalHistoryEntry(fromStatus, toStatus, by = "System") {
+  return {
+    id: uid(),
+    fromStatus: asText(fromStatus, "—"),
+    toStatus: asText(toStatus, "—"),
+    action: asText(toStatus, "Status changed"),
+    by: asText(by, "System"),
+    at: new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" }),
+  };
+}
+
 function TagPill({ label }: any) {
   const t = TAG_OPTIONS.find(t => t.label === label);
   const color = t?.color || "#888";
@@ -1381,12 +1418,16 @@ function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canE
     } else if (!canEditTask) {
       return;
     }
-    onUpdate({ ...item, ...patch });
+    const nextPatch = patch?.status && patch.status !== item.status
+      ? { ...patch, approvalHistory: [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, currentUserName || "You")] }
+      : patch;
+    onUpdate({ ...item, ...nextPatch });
   }
 
   function addComment() {
     if (!canComment || !comment.trim()) return;
-    onUpdate({ ...item, comments: [...item.comments, { id: uid(), author: "You", text: comment.trim(), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }] });
+    const text = comment.trim();
+    onUpdate({ ...item, comments: [...asArray(item.comments), { id: uid(), author: currentUserName || "You", text, mentions: extractMentions(text), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }] });
     setComment("");
   }
   function addSubtask() {
@@ -1479,6 +1520,23 @@ function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canE
             <div style={{ marginTop: 8, fontSize: 11, color: "#676879", lineHeight: 1.45 }}>{planning.reason}</div>
           </div>
 
+          {/* Approval History */}
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#676879", marginBottom: 8 }}>Approval History ({asArray(item.approvalHistory).length})</div>
+            {asArray(item.approvalHistory).length === 0 ? (
+              <div style={{ background: "#f6f7fb", border: "1px solid #eef1f7", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#98a1b3" }}>No approval actions yet.</div>
+            ) : (
+              <div style={{ background: "#f6f7fb", borderRadius: 8, padding: "8px 10px", display: "grid", gap: 6 }}>
+                {asArray(item.approvalHistory).slice().reverse().slice(0, 8).map(h => (
+                  <div key={h.id} style={{ borderBottom: "1px solid #e6e9ef", paddingBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#323338" }}>{h.fromStatus} → {h.toStatus}</div>
+                    <div style={{ fontSize: 10, color: "#98a1b3", marginTop: 2 }}>{h.by || "Unknown"} • {h.at || "—"}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Tags */}
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#676879", marginBottom: 8 }}>Tags</div>
@@ -1530,14 +1588,19 @@ function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canE
                 <Avatar name={c.author} size={28} />
                 <div style={{ background: "#f6f7fb", borderRadius: 8, padding: "8px 12px", flex: 1 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#323338", marginBottom: 2 }}>{c.author} <span style={{ color: "#aaa", fontWeight: 400 }}>{c.time}</span></div>
-                  <div style={{ fontSize: 13, color: "#323338" }}>{c.text}</div>
+                  <div style={{ fontSize: 13, color: "#323338", lineHeight: 1.45 }}>{renderMentionText(c.text)}</div>
+                  {asArray(c.mentions).length > 0 && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                      {asArray(c.mentions).map(m => <span key={m} style={{ background: "#eef4ff", color: "#0073ea", borderRadius: 999, padding: "1px 7px", fontSize: 10, fontWeight: 800 }}>@{m}</span>)}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <Avatar name="You" size={28} />
               <div style={{ flex: 1, display: "flex", gap: 6 }}>
-                <input disabled={!canComment} value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => e.key === "Enter" && addComment()} placeholder="Write a comment…" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: canComment ? "#fff" : "#f2f4f8" }} />
+                <input disabled={!canComment} value={comment} onChange={e => setComment(e.target.value)} onKeyDown={e => e.key === "Enter" && addComment()} placeholder="Write a comment… use @name or @email" style={{ flex: 1, border: "1px solid #e6e9ef", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: canComment ? "#fff" : "#f2f4f8" }} />
                 {canComment && <button onClick={addComment} style={{ background: "#0073ea", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Send</button>}
               </div>
             </div>
@@ -2224,12 +2287,77 @@ function th(dark: boolean, darkVal: string, lightVal: string) { return dark ? da
 
 function getBoardTaskRecords(boards){return asArray(boards).flatMap(board=>asArray(board?.groups).flatMap(group=>asArray(group?.items).map(item=>({board,group,item}))));}
 function isOpenPlanningTask(item){return !["Done","Submitted","Approved"].includes(item?.status);}
-function patchTaskOnBoard(board,groupId,itemId,patch){return {...board,groups:asArray(board.groups).map(group=>group.id!==groupId?group:{...group,items:asArray(group.items).map(item=>item.id===itemId?{...item,...patch}:item)})};}
+function patchTaskOnBoard(board,groupId,itemId,patch){
+  return {
+    ...board,
+    groups: asArray(board.groups).map(group => group.id !== groupId ? group : {
+      ...group,
+      items: asArray(group.items).map(item => {
+        if (item.id !== itemId) return item;
+        const next = { ...item, ...patch };
+        if (patch?.status && patch.status !== item.status) {
+          next.approvalHistory = [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, patch?.actorName || "PM Action")];
+        }
+        return next;
+      })
+    })
+  };
+}
 function taskDailyHours(item){const r=getTaskRange(item);const effort=getEffortHours(item);if(!r)return effort||0;const days=Math.max(1,diffDays(r.start,r.end)+1);return effort>0?effort/days:1;}
 function planningConflicts(boards){const daily=new Map();for(const {board,item} of getBoardTaskRecords(boards)){if(!isOpenPlanningTask(item))continue;const owner=normalizeOwner(item.owner);if(!owner||owner==="No owner")continue;const r=getTaskRange(item);if(!r)continue;const cap=getOwnerCapacity(board,owner,6);const h=taskDailyHours(item);for(let d=new Date(r.start);d<=r.end;d=addDays(d,1)){const date=d.toISOString().slice(0,10);const key=`${board.id}|${owner}|${date}`;const cur=daily.get(key)||{board,owner,date,cap,hours:0,tasks:[]};cur.hours+=h;cur.tasks.push(item.name);daily.set(key,cur);}}return Array.from(daily.values()).filter(x=>x.hours>x.cap).sort((a,b)=>(b.hours-b.cap)-(a.hours-a.cap)).slice(0,10);}
 function ownerLoadScore(board,owner){const cap=getOwnerCapacity(board,owner,6);const items=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)===normalizeOwner(owner));return items.reduce((s,i)=>s+getEffortHours(i),0)/Math.max(cap,1);}
 function autoOwner(board){const owners=getBoardOwners(board).filter(o=>o&&o!=="No owner");return owners.map(owner=>({owner,score:ownerLoadScore(board,owner)})).sort((a,b)=>a.score-b.score)[0]||null;}
 function boardHealth(board){const items=asArray(board.groups).flatMap(g=>asArray(g.items));const total=items.length;const done=items.filter(i=>["Done","Submitted","Approved"].includes(i.status)).length;const overdue=items.filter(i=>isOpenPlanningTask(i)&&isOverdue(i.due)).length;const unassigned=items.filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)==="No owner").length;const risk=items.filter(i=>["At Risk","Invalid","Tight Review"].includes(getPlanningAnalysis(i,getOwnerCapacity(board,i.owner,6)).risk)).length;const score=Math.max(0,Math.min(100,Math.round(100-overdue*12-risk*8-unassigned*5+(total?done/total:1)*20)));return{score,total,done,overdue,unassigned,risk,level:score>=80?"Good":score>=60?"Medium":"Risky"};}
+
+function DashboardReviewPanel({ boards }: any) {
+  const { dark } = useDark();
+  const card = dark ? "#16213e" : "#fff";
+  const text = dark ? "#e0e0f0" : "#323338";
+  const sub = dark ? "#8888aa" : "#676879";
+  const bdr = dark ? "#2a2a4a" : "#eef1f7";
+  const records = getBoardTaskRecords(boards);
+  const mentionComments = records.flatMap(({ board, group, item }) =>
+    asArray(item.comments).filter(c => asArray(c.mentions).length > 0).map(c => ({ board, group, item, comment: c }))
+  ).slice(-12).reverse();
+  const approvals = records.flatMap(({ board, group, item }) =>
+    asArray(item.approvalHistory).map(h => ({ board, group, item, history: h }))
+  ).slice(-12).reverse();
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 18, marginBottom: 18 }}>
+      <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, color: text }}>💬 Mentions</div>
+        <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Comments that include @name or @email.</div>
+        {mentionComments.length === 0 ? <p style={{ fontSize: 12, color: sub }}>No mentions yet.</p> : mentionComments.map(r => (
+          <div key={`${r.board.id}-${r.item.id}-${r.comment.id}`} style={{ marginTop: 9, padding: 10, border: `1px solid ${bdr}`, borderRadius: 9, background: dark ? "#111827" : "#fafbff" }}>
+            <div style={{ fontSize: 12, fontWeight: 900, color: text }}>{r.item.name}</div>
+            <div style={{ fontSize: 11, color: sub }}>{r.board.name} • {r.group.name} • {r.comment.author}</div>
+            <div style={{ fontSize: 12, color: text, marginTop: 5, lineHeight: 1.45 }}>{renderMentionText(r.comment.text)}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 900, color: text }}>✅ Approval History</div>
+        <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Recent submitted / approved / revision actions.</div>
+        {approvals.length === 0 ? <p style={{ fontSize: 12, color: sub }}>No approval history yet.</p> : approvals.map(r => (
+          <div key={`${r.board.id}-${r.item.id}-${r.history.id}`} style={{ marginTop: 9, padding: 10, border: `1px solid ${bdr}`, borderRadius: 9, background: dark ? "#111827" : "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.item.name}</div>
+                <div style={{ fontSize: 11, color: sub }}>{r.history.by || "Unknown"} • {r.history.at || "—"}</div>
+              </div>
+              <span style={{ flexShrink: 0, background: "#eef4ff", color: "#0073ea", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 900 }}>{r.history.toStatus}</span>
+            </div>
+            <div style={{ marginTop: 5, fontSize: 11, color: sub }}>{r.history.fromStatus} → {r.history.toStatus}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 function PlanningSuitePanel({boards,onPatchBoard}:any){const{dark}=useDark();const card=dark?"#16213e":"#fff";const text=dark?"#e0e0f0":"#323338";const sub=dark?"#8888aa":"#676879";const bdr=dark?"#2a2a4a":"#eef1f7";const records=useMemo(()=>getBoardTaskRecords(boards),[boards]);const conflicts=useMemo(()=>planningConflicts(boards),[boards]);const health=useMemo(()=>asArray(boards).map(board=>({board,...boardHealth(board)})),[boards]);const unassigned=records.filter(({item})=>isOpenPlanningTask(item)&&normalizeOwner(item.owner)==="No owner").slice(0,8);const risky=records.filter(({item})=>isOpenPlanningTask(item)).map(r=>({...r,a:getPlanningAnalysis(r.item,getOwnerCapacity(r.board,r.item.owner,6))})).filter(r=>["At Risk","Invalid","Tight Review","Tight","Missing deadline"].includes(r.a.risk)).slice(0,8);const pm=records.filter(({item})=>isOpenPlanningTask(item)&&(["Ready for PM Review","PM Reviewing","Need Revision"].includes(item.status)||isPmReviewDueSoon(item))).slice(0,8);const upd=(r,patch)=>onPatchBoard?.(r.board.id,board=>patchTaskOnBoard(board,r.group.id,r.item.id,patch));return <div style={{display:"grid",gap:18,marginBottom:18}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:14}}>{health.map(h=><div key={h.board.id} style={{background:card,borderRadius:12,padding:"14px 16px",border:`1px solid ${bdr}`,borderLeft:`5px solid ${h.score>=80?"#00c875":h.score>=60?"#fdab3d":"#e2445c"}`}}><div style={{fontSize:11,color:sub,fontWeight:800}}>PROJECT HEALTH</div><div style={{fontSize:26,fontWeight:900,color:text}}>{h.score}% <span style={{fontSize:12}}>{h.level}</span></div><div style={{fontSize:11,color:sub}}>{h.board.name}</div><div style={{fontSize:11,color:sub,marginTop:6}}>Done {h.done}/{h.total} • Risk {h.risk} • Overdue {h.overdue} • No owner {h.unassigned}</div></div>)}</div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:18}}><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>⚠️ Workload Conflict Warning</b><div style={{fontSize:12,color:sub,marginTop:4}}>Daily workload above capacity.</div>{conflicts.length===0?<p style={{fontSize:12,color:sub}}>No overload detected.</p>:conflicts.map(c=><div key={`${c.board.id}-${c.owner}-${c.date}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`,background:dark?"#211a14":"#fff8e6"}}><b style={{fontSize:12,color:text}}>{c.owner}</b><span style={{float:"right",fontSize:11,color:"#d4900a",fontWeight:900}}>{Math.round(c.hours*10)/10}h / {c.cap}h</span><div style={{fontSize:11,color:sub}}>{c.board.name} • {c.date}</div><div style={{fontSize:10,color:sub}}>{c.tasks.slice(0,3).join(" • ")}</div></div>)}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>🤖 Auto Assign Owner</b><div style={{fontSize:12,color:sub,marginTop:4}}>Suggest least-loaded person.</div>{unassigned.length===0?<p style={{fontSize:12,color:sub}}>No unassigned tasks.</p>:unassigned.map(r=>{const rec=autoOwner(r.board);return <div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`}}><div style={{fontSize:12,fontWeight:800,color:text}}>{r.item.name}</div><div style={{fontSize:11,color:sub}}>Recommend: <b>{rec?.owner||"Add team member first"}</b></div>{rec&&<button onClick={()=>upd(r,{owner:rec.owner})} style={{marginTop:7,border:"none",borderRadius:7,background:"#0073ea",color:"#fff",padding:"5px 9px",fontSize:11,fontWeight:800,cursor:"pointer"}}>Assign</button>}</div>})}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>🧠 Smart Schedule Suggestion</b><div style={{fontSize:12,color:sub,marginTop:4}}>Risky schedule suggestions.</div>{risky.length===0?<p style={{fontSize:12,color:sub}}>No risky schedules.</p>:risky.map(r=><div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`,borderLeft:`4px solid ${r.a.riskColor}`}}><b style={{fontSize:12,color:text}}>{r.item.name}</b><span style={{float:"right",fontSize:10,color:r.a.riskColor,fontWeight:900}}>{r.a.risk}</span><div style={{fontSize:11,color:sub}}>Start: {formatDateOnly(r.a.suggestedStart)||"—"} • PM: {formatDateOnly(r.a.suggestedPmReview)||"—"} • Final: {formatDateOnly(r.a.finalDeadline)||"—"}</div><div style={{fontSize:10,color:sub}}>{r.a.reason}</div></div>)}</div><div style={{background:card,borderRadius:12,padding:16,border:`1px solid ${bdr}`}}><b style={{color:text}}>✅ PM Approval Flow</b><div style={{fontSize:12,color:sub,marginTop:4}}>Quick PM actions.</div>{pm.length===0?<p style={{fontSize:12,color:sub}}>No PM queue.</p>:pm.map(r=><div key={`${r.board.id}-${r.item.id}`} style={{marginTop:8,padding:9,borderRadius:9,border:`1px solid ${bdr}`}}><div style={{fontSize:12,fontWeight:800,color:text}}>{r.item.name}</div><div style={{display:"flex",gap:6,marginTop:7,flexWrap:"wrap"}}><button onClick={()=>upd(r,{status:"Ready for PM Review",pmReviewDate:new Date().toISOString().slice(0,10)})}>Submit</button><button onClick={()=>upd(r,{status:"Approved"})}>Approve</button><button onClick={()=>upd(r,{status:"Need Revision"})}>Revision</button><button onClick={()=>upd(r,{status:"Stuck"})}>Reject</button></div></div>)}</div></div></div>}
 
 
@@ -2302,6 +2430,7 @@ function Dashboard({ boards, onPatchBoard }: any) {
   const text = dark ? "#e0e0f0" : "#323338";
   const sub  = dark ? "#8888aa" : "#676879";
   const bdr  = dark ? "#2a2a4a" : "#f0f0f0";
+  const [dashTab, setDashTab] = useState("overview");
 
   const allItems = boards.flatMap((b: any) => b.groups.flatMap((g: any) => g.items));
   const byStatus   = STATUS_OPTIONS.map(s => ({ ...s, count: allItems.filter((i: any) => i.status === s.label).length }));
@@ -2323,10 +2452,23 @@ function Dashboard({ boards, onPatchBoard }: any) {
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: bg }}>
-      <h2 style={{ margin: "0 0 24px", fontSize: 20, fontWeight: 800, color: text }}>📊 Dashboard</h2>
-      <PlanningSuitePanel boards={boards} onPatchBoard={onPatchBoard} />
-      <GanttWhatIfPanel boards={boards} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: text }}>📊 Dashboard</h2>
+        <div style={{ display: "flex", gap: 6, background: card, border: `1px solid ${bdr}`, borderRadius: 999, padding: 4 }}>
+          {[
+            ["overview", "Overview"],
+            ["planning", "Planning"],
+            ["reviews", "Comments & Approval"],
+          ].map(([key, label]) => (
+            <button key={key} onClick={() => setDashTab(key)} style={{ border: "none", borderRadius: 999, padding: "6px 12px", background: dashTab === key ? "#0073ea" : "transparent", color: dashTab === key ? "#fff" : sub, fontSize: 12, fontWeight: 900, cursor: "pointer" }}>{label}</button>
+          ))}
+        </div>
+      </div>
 
+      {dashTab === "planning" && <><PlanningSuitePanel boards={boards} onPatchBoard={onPatchBoard} /><GanttWhatIfPanel boards={boards} /></>}
+      {dashTab === "reviews" && <DashboardReviewPanel boards={boards} />}
+
+      {dashTab === "overview" && <>
       {/* KPI cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(148px,1fr))", gap: 14, marginBottom: 28 }}>
         {[
@@ -2453,6 +2595,7 @@ function Dashboard({ boards, onPatchBoard }: any) {
             ))}
         </div>
       )}
+      </>}
     </div>
   );
 }
