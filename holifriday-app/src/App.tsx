@@ -1179,37 +1179,51 @@ function Dropdown({ value, options, onChange, width = 140 }) {
 }
 
 function DotSlider({ value, options, onChange, width = 170, disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useClickOutside(ref, () => setOpen(false));
   const activeIndex = Math.max(0, options.findIndex(o => o.label === value));
   const active = options[activeIndex] || options[0];
 
   return (
-    <div style={{ width: "100%", maxWidth: width, minWidth: 96 }}>
-      <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
-        <span style={{ maxWidth: "100%", textAlign: "center", background: active?.color || "#676879", color: "#fff", borderRadius: 999, padding: "2px 8px", fontSize: 10, fontWeight: 700, opacity: disabled ? 0.7 : 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {active?.label || value}
-        </span>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(options.length - 1, 0)}
-          step={1}
-          value={activeIndex}
-          disabled={disabled}
-          onChange={e => onChange(options[Number(e.target.value)]?.label || value)}
-          style={{ flex: 1, accentColor: active?.color || "#579bfc", cursor: disabled ? "not-allowed" : "pointer", height: 18 }}
-        />
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, padding: "0 2px" }}>
+    <div ref={ref} style={{ width: "100%", maxWidth: width, minWidth: 96, position: "relative" }}>
+      <button
+        disabled={disabled}
+        onClick={() => !disabled && setOpen(v => !v)}
+        style={{ width: "100%", border: "none", borderRadius: 7, background: active?.color || "#676879", color: "#fff", padding: "6px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 11, fontWeight: 800, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.7 : 1 }}
+      >
+        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{active?.label || value}</span>
+        <span style={{ fontSize: 10, opacity: 0.9 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 1100, width: "100%", maxHeight: 240, overflowY: "auto", background: "#fff", border: "1px solid #e6e9ef", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.18)", padding: 4 }}>
+          {options.map((opt, idx) => (
+            <button
+              key={opt.label}
+              title={opt.label}
+              onClick={() => {
+                onChange(opt.label);
+                setOpen(false);
+              }}
+              style={{ width: "100%", border: "none", borderRadius: 6, background: activeIndex === idx ? "#eef4ff" : "#fff", color: "#323338", padding: "6px 8px", marginBottom: idx === options.length - 1 ? 0 : 2, display: "flex", alignItems: "center", gap: 8, textAlign: "left", cursor: "pointer", fontSize: 11, fontWeight: activeIndex === idx ? 800 : 600 }}
+            >
+              <span style={{ width: 10, height: 10, borderRadius: "50%", background: opt.color, flexShrink: 0 }} />
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 4, marginTop: 4, overflowX: "auto", paddingBottom: 2 }}>
         {options.map((opt, idx) => (
           <button
-            key={opt.label}
+            key={`${opt.label}-chip`}
             disabled={disabled}
-            title={opt.label}
             onClick={() => onChange(opt.label)}
-            style={{ width: 10, height: 10, borderRadius: "50%", border: "none", padding: 0, background: idx <= activeIndex ? opt.color : "#e1e5ef", transition: "background .15s", cursor: disabled ? "not-allowed" : "pointer" }}
-          />
+            style={{ border: activeIndex === idx ? "none" : "1px solid #d8dbe4", background: activeIndex === idx ? opt.color : "#fff", color: activeIndex === idx ? "#fff" : "#676879", borderRadius: 999, padding: "2px 7px", fontSize: 10, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
+          >
+            {opt.label}
+          </button>
         ))}
       </div>
     </div>
