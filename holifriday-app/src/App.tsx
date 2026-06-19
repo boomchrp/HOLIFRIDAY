@@ -585,6 +585,7 @@ function normalizeBoards(value, fallback = []) {
     id: board?.id ?? uid(),
     name: asText(board?.name, `Board ${index + 1}`),
     color: asText(board?.color, GROUP_COLORS[index % GROUP_COLORS.length]),
+    resourceCapacity: board?.resourceCapacity && typeof board.resourceCapacity === "object" ? board.resourceCapacity : {},
     groups: asArray(board?.groups).map((group, groupIndex) => normalizeGroup(group, groupIndex)),
     activityLogs: trimActivityLogs(asArray(board?.activityLogs).map(log => ({
       id: log?.id ?? uid(),
@@ -836,6 +837,53 @@ function getRequiredWorkDays(task, capacityHoursPerDay = 6) {
   if (effort <= 0) return 0;
   const cap = Math.max(1, Number(capacityHoursPerDay) || 6);
   return Math.max(1, Math.ceil(effort / cap));
+}
+
+
+function capacityKey(owner) {
+  return memberRoleKey(normalizeOwner(owner));
+}
+
+function getBoardOwners(board) {
+  const owners = [];
+  for (const group of asArray(board?.groups)) {
+    owners.push(...asArray(group?.members));
+    for (const item of asArray(group?.items)) {
+      const owner = normalizeOwner(item?.owner);
+      if (owner && owner !== "No owner") owners.push(owner);
+    }
+  }
+  return uniqueStrings(owners.map(normalizeOwner)).filter(o => o && o !== "No owner");
+}
+
+function getBoardResourceCapacity(board) {
+  return board?.resourceCapacity && typeof board.resourceCapacity === "object"
+    ? board.resourceCapacity
+    : {};
+}
+
+function getOwnerCapacity(board, owner, fallback = 6) {
+  const capMap = getBoardResourceCapacity(board);
+  const entry = capMap[capacityKey(owner)];
+  const raw = entry && typeof entry === "object" ? entry.hoursPerDay : entry;
+  const n = Number(raw ?? fallback);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function setOwnerCapacityOnBoard(board, owner, hoursPerDay) {
+  const n = Math.max(0, Number(hoursPerDay) || 0);
+  const key = capacityKey(owner);
+  return {
+    ...board,
+    resourceCapacity: {
+      ...getBoardResourceCapacity(board),
+      [key]: {
+        owner: normalizeOwner(owner),
+        hoursPerDay: n,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  };
 }
 
 function getPlanningAnalysis(task, capacityHoursPerDay = 6) {
@@ -1846,15 +1894,22 @@ function TeamScheduleView({ board, onOpen }: any) {
 }
 
 
-function PMPlanningView({ board, onOpen }: any) {
-  const [capacity, setCapacity] = useState(6);
+function PMPlanningView({ board, onOpen, onUpdateCapacity }: any) {
+  const [fallbackCapacity, setFallbackCapacity] = useState(6);
   const [hideDone, setHideDone] = useState(true);
   const [riskFilter, setRiskFilter] = useState("All");
+  const projectOwners = useMemo(() => getBoardOwners(board), [board]);
+
+  function updateOwnerCapacity(owner, hoursPerDay) {
+    if (!onUpdateCapacity) return;
+    onUpdateCapacity(board.id, owner, hoursPerDay);
+  }
+
   const tasks = useMemo(() => {
     return board.groups
       .flatMap(g => asArray(g.items).map(i => ({ ...i, _groupId: g.id, _groupName: g.name, _groupColor: g.color })))
       .filter(i => !hideDone || !["Done", "Submitted", "Approved"].includes(i.status))
-      .map(i => ({ ...i, _analysis: getPlanningAnalysis(i, capacity) }))
+      .map(i => ({ ...i, _capacityHoursPerDay: getOwnerCapacity(board, i.owner, fallbackCapacity), _analysis: getPlanningAnalysis(i, getOwnerCapacity(board, i.owner, fallbackCapacity)) }))
       .filter(i => riskFilter === "All" || i._analysis.risk === riskFilter)
       .sort((a, b) => {
         const ar = ["At Risk", "Invalid", "Tight Review", "Tight", "Missing deadline", "On Track", "Completed"].indexOf(a._analysis.risk);
@@ -1864,7 +1919,7 @@ function PMPlanningView({ board, onOpen }: any) {
         const bd = b._analysis.suggestedPmReview?.getTime?.() || b._analysis.finalDeadline?.getTime?.() || 9e15;
         return ad - bd;
       });
-  }, [board, capacity, hideDone, riskFilter]);
+  }, [board, fallbackCapacity, hideDone, riskFilter]);
 
   const pmQueue = tasks.filter(t => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(t.status) || isPmReviewDueSoon(t));
   const atRisk = tasks.filter(t => ["At Risk", "Invalid", "Tight Review"].includes(t._analysis.risk));
@@ -1879,8 +1934,8 @@ function PMPlanningView({ board, onOpen }: any) {
             <div style={{ marginTop: 3, fontSize: 12, color: "#676879" }}>Backward-plan from Final Deadline, PM review time, revision buffer, and effort hours.</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}>Capacity hr/day
-              <input type="number" min={1} max={12} value={capacity} onChange={e => setCapacity(Math.max(1, Number(e.target.value) || 1))} style={{ width: 58, border: "1px solid #d8dbe4", borderRadius: 7, padding: "5px 7px", fontSize: 12 }} />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#676879" }}>Default hr/day
+              <input type="number" min={1} max={12} value={fallbackCapacity} onChange={e => setFallbackCapacity(Math.max(1, Number(e.target.value) || 1))} style={{ width: 58, border: "1px solid #d8dbe4", borderRadius: 7, padding: "5px 7px", fontSize: 12 }} />
             </label>
             <select value={riskFilter} onChange={e => setRiskFilter(e.target.value)} style={{ border: "1px solid #d8dbe4", borderRadius: 7, padding: "6px 8px", fontSize: 12, background: "#fff" }}>
               {riskOptions.map(r => <option key={r}>{r}</option>)}
@@ -1897,12 +1952,51 @@ function PMPlanningView({ board, onOpen }: any) {
         </div>
 
         <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 900, color: "#323338" }}>Team Capacity / Availability</div>
+              <div style={{ marginTop: 2, fontSize: 11, color: "#98a1b3" }}>Set how many hours each person can spend on this project per day.</div>
+            </div>
+          </div>
+
+          {projectOwners.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#98a1b3" }}>Assign owners to tasks first, then capacity settings will appear here.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+              {projectOwners.map(owner => {
+                const cap = getOwnerCapacity(board, owner, fallbackCapacity);
+                const ownerTasks = tasks.filter(t => normalizeOwner(t.owner) === normalizeOwner(owner));
+                const ownerEffort = ownerTasks.reduce((sum, t) => sum + getEffortHours(t), 0);
+                return (
+                  <div key={owner} style={{ border: "1px solid #eef1f7", borderRadius: 10, background: "#fafbff", padding: "10px 12px" }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner}</div>
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={24}
+                        step={0.5}
+                        value={cap}
+                        onChange={e => updateOwnerCapacity(owner, e.target.value)}
+                        style={{ width: 72, border: "1px solid #d8dbe4", borderRadius: 7, padding: "5px 7px", fontSize: 12 }}
+                      />
+                      <span style={{ fontSize: 12, color: "#676879" }}>hr/day</span>
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 11, color: "#98a1b3" }}>{ownerTasks.length} active task(s) • {ownerEffort}h effort</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef1f7" }}>
           <div style={{ fontSize: 12, fontWeight: 900, color: "#323338", marginBottom: 8 }}>PM Review Queue</div>
           {pmQueue.length === 0 ? <div style={{ fontSize: 12, color: "#98a1b3" }}>No tasks waiting for PM review or due for review soon.</div> : (
             <div style={{ display: "grid", gap: 8 }}>
               {pmQueue.slice(0, 8).map(t => <button key={t.id} onClick={() => onOpen(t)} style={{ textAlign: "left", border: "1px solid #eef1f7", background: "#fff", borderLeft: `4px solid ${t._analysis.riskColor}`, borderRadius: 8, padding: "9px 10px", cursor: "pointer" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><b style={{ fontSize: 13, color: "#323338" }}>{t.name}</b><span style={{ fontSize: 11, fontWeight: 900, color: t._analysis.riskColor }}>{t._analysis.risk}</span></div>
-                <div style={{ marginTop: 3, fontSize: 11, color: "#676879" }}>PM: {formatDateOnly(t._analysis.suggestedPmReview) || "—"} • Final: {formatDateOnly(t._analysis.finalDeadline) || "—"} • {t.owner || "Unassigned"}</div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#676879" }}>PM: {formatDateOnly(t._analysis.suggestedPmReview) || "—"} • Final: {formatDateOnly(t._analysis.finalDeadline) || "—"} • {t.owner || "Unassigned"} • {t._capacityHoursPerDay}h/day</div>
               </button>)}
             </div>
           )}
@@ -1928,7 +2022,7 @@ function PMPlanningView({ board, onOpen }: any) {
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7", fontWeight: 800, color: "#323338" }}>{t.name}<div style={{ fontSize: 10, color: "#98a1b3", fontWeight: 600 }}>{t._groupName}</div></td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{t.owner || "Unassigned"}</td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{t.status}</td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{getEffortHours(t) || "—"}h</td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{getEffortHours(t) || "—"}h<div style={{ fontSize: 10, color: "#98a1b3" }}>{t._capacityHoursPerDay}h/day</div></td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.suggestedStart) || "—"}</td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.suggestedPmReview) || "—"}</td>
                   <td style={{ padding: "10px 12px", borderBottom: "1px solid #eef1f7" }}>{formatDateOnly(t._analysis.finalDeadline) || "—"}</td>
@@ -1984,7 +2078,7 @@ function DonutChart({ slices, size = 120 }: { slices: { value: number; color: st
   );
 }
 
-function Dashboard({ boards }: any) {
+function Dashboard({ boards, onPatchBoard }: any) {
   const { dark } = useDark();
   const bg   = dark ? "#1a1a2e" : "#f7f8fc";
   const card = dark ? "#16213e" : "#fff";
@@ -3512,6 +3606,84 @@ function AppContent() {
     await signOut(firebaseAuth);
   }
 
+
+  function handleExportBoards() {
+    try {
+      const payload = {
+        app: "HOLIFRIDAY",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        exportedBy: authUser?.email || "",
+        boards,
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      a.href = url;
+      a.download = `holifriday-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+      window.alert("Export failed. Please try again.");
+    }
+  }
+
+  function handleImportBoards() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const raw = JSON.parse(String(reader.result || "{}"));
+          const importedBoards = Array.isArray(raw) ? raw : raw.boards;
+
+          if (!Array.isArray(importedBoards)) {
+            window.alert("Invalid HOLIFRIDAY backup file.");
+            return;
+          }
+
+          const normalized = normalizeBoards(importedBoards, INITIAL_BOARDS);
+          if (!normalized.length) {
+            window.alert("Backup file has no boards.");
+            return;
+          }
+
+          const ok = window.confirm(
+            `Import ${normalized.length} board(s)? This will replace the current boards for everyone using this shared workspace.`
+          );
+
+          if (!ok) return;
+
+          setBoards(normalized);
+          setActiveId(normalized[0]?.id || INITIAL_BOARDS[0].id);
+          setActiveView("boards");
+          window.alert("Import completed.");
+        } catch (err) {
+          console.error("Import failed:", err);
+          window.alert("Import failed. Please check the JSON file.");
+        }
+      };
+
+      reader.readAsText(file);
+    };
+
+    input.click();
+  }
+
   function clearInviteQuery() {
     try {
       const url = new URL(window.location.href);
@@ -3679,6 +3851,8 @@ function AppContent() {
               <span>🔍</span><span>Search all boards</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
             </button>
+            <button onClick={handleExportBoards} title="Export boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export backup</button>
+            <button onClick={handleImportBoards} title="Import boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Import backup</button>
             {/* Dark mode toggle */}
             <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
               {dark ? "☀️" : "🌙"}
@@ -3713,7 +3887,7 @@ function AppContent() {
           </div>
         )}
         {activeView === "dashboard"
-          ? <Dashboard boards={boards} />
+          ? <Dashboard boards={boards} onPatchBoard={patchBoardById} />
           : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onPatchBoard={patchBoardById} onCelebrate={celebrate} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} jumpItemId={jumpItemId} onJumpHandled={() => setJumpItemId(null)} />
         }
       </div>
