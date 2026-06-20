@@ -2571,7 +2571,7 @@ function DonutChart({ slices, size = 120 }: { slices: { value: number; color: st
 
 
 
-function AdvancedPMPanel({ boards, onPatchBoard, onSetBoards }: any) {
+function AdvancedPMPanel({ boards, onPatchBoard, onSetBoards, currentUserEmail = '' }: any) {
   const { dark } = useDark();
   const card = dark ? "#16213e" : "#fff";
   const bg = dark ? "#101827" : "#fafbff";
@@ -2955,7 +2955,7 @@ function AdvancedPMPanel({ boards, onPatchBoard, onSetBoards }: any) {
 }
 
 
-function SettingsPanel({ boards, onPatchBoard }: any) {
+function SettingsPanel({ boards, onPatchBoard, currentUserEmail = '' }: any) {
   const { dark } = useDark();
   const card = dark ? "#16213e" : "#fff";
   const bg = dark ? "#101827" : "#fafbff";
@@ -3117,6 +3117,7 @@ function SettingsPanel({ boards, onPatchBoard }: any) {
 
   function addRole() {
     if (!board || !normalizeEmail(roleEmail)) return;
+    if (!getBoardPermissions(getBoardRole(board, currentUserEmail)).canAdmin) { window.alert("Only Admin can change board roles."); return; }
     const email = normalizeEmail(roleEmail);
     const key = memberRoleKey(email);
     const role = {
@@ -3138,6 +3139,7 @@ function SettingsPanel({ boards, onPatchBoard }: any) {
 
   function removeRole(email) {
     if (!board || !email) return;
+    if (!getBoardPermissions(getBoardRole(board, currentUserEmail)).canAdmin) { window.alert("Only Admin can change board roles."); return; }
     const key = memberRoleKey(email);
     onPatchBoard?.(board.id, current => {
       const next = { ...(current.boardRoles && typeof current.boardRoles === "object" ? current.boardRoles : {}) };
@@ -3280,7 +3282,7 @@ function SettingsPanel({ boards, onPatchBoard }: any) {
   );
 }
 
-function PMSuitePanel({ boards, onPatchBoard, onSetBoards }: any) {
+function PMSuitePanel({ boards, onPatchBoard, onSetBoards, currentUserEmail = '' }: any) {
   const { dark } = useDark();
   const card = dark ? "#16213e" : "#fff";
   const bg = dark ? "#101827" : "#fafbff";
@@ -3591,7 +3593,7 @@ function icsEscape(value) { return String(value ?? "").replace(/\\/g, "\\\\").re
 function icsEvent(summary, dateKey, description = "") { const uidText = `${Date.now()}-${Math.random().toString(36).slice(2)}@holifriday`; return ["BEGIN:VEVENT", `UID:${uidText}`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`, `DTSTART;VALUE=DATE:${icsDate(dateKey)}`, `SUMMARY:${icsEscape(summary)}`, `DESCRIPTION:${icsEscape(description)}`, "END:VEVENT"].join("\r\n"); }
 function downloadText(filename, content, mime = "text/plain;charset=utf-8") { const blob = new Blob([content], { type: mime }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
-function Dashboard({ boards, onPatchBoard, onSetBoards, simpleMode = true }: any) {
+function Dashboard({ boards, onPatchBoard, onSetBoards, simpleMode = true, currentUserEmail = '' }: any) {
   const { dark } = useDark();
   const bg   = dark ? "#1a1a2e" : "#f7f8fc";
   const card = dark ? "#16213e" : "#fff";
@@ -3647,9 +3649,9 @@ function Dashboard({ boards, onPatchBoard, onSetBoards, simpleMode = true }: any
 
       {dashTab === "planning" && <><PlanningSuitePanel boards={boards} onPatchBoard={onPatchBoard} /><GanttWhatIfPanel boards={boards} /></>}
       {dashTab === "availability" && <AvailabilityPanel boards={boards} onPatchBoard={onPatchBoard} />}
-      {dashTab === "pmSuite" && <PMSuitePanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} />}
-      {dashTab === "advanced" && <AdvancedPMPanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} />}
-      {dashTab === "governance" && <SettingsPanel boards={boards} onPatchBoard={onPatchBoard} />}
+      {dashTab === "pmSuite" && <PMSuitePanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} currentUserEmail={currentUserEmail} />}
+      {dashTab === "advanced" && <AdvancedPMPanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} currentUserEmail={currentUserEmail} />}
+      {dashTab === "governance" && <SettingsPanel boards={boards} onPatchBoard={onPatchBoard} currentUserEmail={currentUserEmail} />}
       {dashTab === "reviews" && <DashboardReviewPanel boards={boards} />}
 
       {dashTab === "overview" && <>
@@ -4054,7 +4056,7 @@ function ItemRow({ item, groupColor, onUpdate, onDelete, onCelebrate, onOpen, ow
 
 // ─── Group (Table) ────────────────────────────────────────────────────────────
 
-function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem, currentUserName, currentUserEmail }: any) {
+function Group({ boardRole = "Admin", group, onUpdate, onDelete, onCelebrate, onOpenItem, currentUserName, currentUserEmail }: any) {
   const [collapsed, setCollapsed] = useState(false);
   const [inviteNotice, setInviteNotice] = useState("");
   const [latestInviteToken, setLatestInviteToken] = useState("");
@@ -4082,9 +4084,10 @@ function Group({ group, onUpdate, onDelete, onCelebrate, onOpenItem, currentUser
   const done = group.items.filter(i => i.status === "Done").length;
   const normalizedUserEmail = normalizeEmail(currentUserEmail);
   const currentRole = normalizeRole(group.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor");
-  const canManage = !normalizedUserEmail || currentRole === "editor";
-  const canEditTask = canManage;
-  const canEditStatus = true;
+  const boardPermissions = getBoardPermissions(boardRole || "Admin");
+  const canManage = boardPermissions.canAdmin && (!normalizedUserEmail || currentRole === "editor");
+  const canEditTask = boardPermissions.canEdit && (!normalizedUserEmail || currentRole === "editor");
+  const canEditStatus = boardPermissions.canEdit || boardPermissions.canReview;
   const memberRoles = group.memberRoles || {};
   const pendingInvites = asArray(group.invites);
   const latestInvite = pendingInvites.find(inv => inv.token === latestInviteToken) || pendingInvites[pendingInvites.length - 1] || null;
@@ -4288,6 +4291,8 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
   const [ownerSlideIndex, setOwnerSlideIndex] = useState(0);
   const [panelItem, setPanelItem] = useState(null);
   const [activityOpen, setActivityOpen] = useState(false);
+  const boardRole = getBoardRole(board, currentUserEmail);
+  const boardPermissions = getBoardPermissions(boardRole || "Admin");
   const normalizedUserEmail = normalizeEmail(currentUserEmail);
   const totalTasksCount = board.groups.reduce((sum, g) => sum + g.items.length, 0);
   const canEditBoard = !normalizedUserEmail || board.groups.some(g => normalizeRole(g.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") === "editor");
@@ -4538,7 +4543,8 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
             <button key={v} onClick={() => setView(v)} style={{ background: view === v ? "#fff" : "none", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: view === v ? "#0073ea" : "#676879", cursor: "pointer", boxShadow: view === v ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{label}</button>
           ))}
         </div>
-        <button onClick={() => setActivityOpen(true)} style={{ background: "#fff", color: "#323338", border: "1px solid #d8dbe4", borderRadius: 20, padding: "7px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Activity</button>
+        <span style={{ background: boardPermissions.canEdit ? "#e8fff3" : boardPermissions.canReview ? "#eef4ff" : "#f6f7fb", color: boardPermissions.canEdit ? "#00a35a" : boardPermissions.canReview ? "#1f5ecf" : "#676879", borderRadius: 999, padding: "3px 9px", fontSize: 11, fontWeight: 900 }}>Your role: {boardRole}</span>
+          <button onClick={() => setActivityOpen(true)} style={{ background: "#fff", color: "#323338", border: "1px solid #d8dbe4", borderRadius: 20, padding: "7px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Activity</button>
         <button onClick={addGroup} disabled={!canCreateGroup} style={{ background: canCreateGroup ? "#0073ea" : "#c4cad6", color: "#fff", border: "none", borderRadius: 20, padding: "7px 18px", fontWeight: 700, fontSize: 13, cursor: canCreateGroup ? "pointer" : "not-allowed" }}
           onMouseEnter={e => e.currentTarget.style.background = "#0060c0"}
           onMouseLeave={e => e.currentTarget.style.background = canCreateGroup ? "#0073ea" : "#c4cad6"}
@@ -4790,6 +4796,445 @@ function GlobalSearch({ boards, onNavigate, onClose }: { boards: any[]; onNaviga
   );
 }
 
+
+
+function normalizeBoardAccessRole(value) {
+  const v = asText(value || "Viewer").trim().toLowerCase();
+  if (v === "admin") return "Admin";
+  if (v === "editor") return "Editor";
+  if (v === "reviewer") return "Reviewer";
+  if (v === "client") return "Client";
+  if (v === "viewer" || v === "view") return "Viewer";
+  return "Viewer";
+}
+
+function getBoardRole(board, email) {
+  const roleMap = board?.boardRoles && typeof board.boardRoles === "object" ? board.boardRoles : {};
+  const rows: any[] = Object.values(roleMap);
+  const normalizedEmail = normalizeEmail(email);
+  if (rows.length === 0) return "Admin"; // legacy boards: keep owner/editor workflow unlocked
+  if (!normalizedEmail) return "Viewer";
+  const direct = roleMap[memberRoleKey(normalizedEmail)] || roleMap[normalizedEmail];
+  if (direct) return normalizeBoardAccessRole(direct.role || direct);
+  const found: any = rows.find((r: any) => normalizeEmail(r?.email) === normalizedEmail);
+  return found ? normalizeBoardAccessRole(found.role) : "Viewer";
+}
+
+function getBoardPermissions(role) {
+  const r = normalizeBoardAccessRole(role);
+  return {
+    role: r,
+    canAdmin: r === "Admin",
+    canEdit: r === "Admin" || r === "Editor",
+    canReview: r === "Admin" || r === "Editor" || r === "Reviewer",
+    canComment: r === "Admin" || r === "Editor" || r === "Reviewer" || r === "Client",
+    canRequest: r === "Admin" || r === "Editor" || r === "Client",
+    canView: true,
+  };
+}
+
+function stripReviewAllowedFields(item) {
+  const {
+    status,
+    comments,
+    approvalHistory,
+    updatedAt,
+    updatedBy,
+    version,
+    ...rest
+  } = item || {};
+  return rest;
+}
+
+function isReviewOnlyBoardChange(prevBoard, nextBoard) {
+  if (!prevBoard || !nextBoard) return false;
+  const prevGroups = asArray(prevBoard.groups);
+  const nextGroups = asArray(nextBoard.groups);
+  if (prevGroups.length !== nextGroups.length) return false;
+
+  const prevBoardMeta = { ...prevBoard, groups: undefined, activityLogs: undefined };
+  const nextBoardMeta = { ...nextBoard, groups: undefined, activityLogs: undefined };
+  if (JSON.stringify(prevBoardMeta) !== JSON.stringify(nextBoardMeta)) return false;
+
+  for (const prevGroup of prevGroups) {
+    const nextGroup = nextGroups.find(g => String(g.id) === String(prevGroup.id));
+    if (!nextGroup) return false;
+
+    const prevGroupMeta = { ...prevGroup, items: undefined };
+    const nextGroupMeta = { ...nextGroup, items: undefined };
+    if (JSON.stringify(prevGroupMeta) !== JSON.stringify(nextGroupMeta)) return false;
+
+    const prevItems = asArray(prevGroup.items);
+    const nextItems = asArray(nextGroup.items);
+    if (prevItems.length !== nextItems.length) return false;
+
+    for (const prevItem of prevItems) {
+      const nextItem = nextItems.find(i => String(i.id) === String(prevItem.id));
+      if (!nextItem) return false;
+      if (JSON.stringify(stripReviewAllowedFields(prevItem)) !== JSON.stringify(stripReviewAllowedFields(nextItem))) return false;
+    }
+  }
+  return true;
+}
+
+function isClientRequestOnlyBoardChange(prevBoard, nextBoard) {
+  if (!prevBoard || !nextBoard) return false;
+  const prevGroups = asArray(prevBoard.groups);
+  const nextGroups = asArray(nextBoard.groups);
+  if (prevGroups.length !== nextGroups.length) return false;
+
+  let addedRequestCount = 0;
+  for (const prevGroup of prevGroups) {
+    const nextGroup = nextGroups.find(g => String(g.id) === String(prevGroup.id));
+    if (!nextGroup) return false;
+
+    const prevGroupMeta = { ...prevGroup, items: undefined };
+    const nextGroupMeta = { ...nextGroup, items: undefined };
+    if (JSON.stringify(prevGroupMeta) !== JSON.stringify(nextGroupMeta)) return false;
+
+    const prevItems = asArray(prevGroup.items);
+    const nextItems = asArray(nextGroup.items);
+    const prevIds = new Set(prevItems.map(i => String(i.id)));
+    const nextExisting = nextItems.filter(i => prevIds.has(String(i.id)));
+    if (nextExisting.length !== prevItems.length) return false;
+
+    for (const prevItem of prevItems) {
+      const nextItem = nextItems.find(i => String(i.id) === String(prevItem.id));
+      if (!nextItem || JSON.stringify(prevItem) !== JSON.stringify(nextItem)) return false;
+    }
+
+    const added = nextItems.filter(i => !prevIds.has(String(i.id)));
+    for (const item of added) {
+      if (!asArray(item.tags).includes("Request")) return false;
+      addedRequestCount += 1;
+    }
+  }
+  return addedRequestCount === 1;
+}
+
+function canApplyBoardMutation(prevBoard, nextBoard, email, silent = false) {
+  const role = getBoardRole(prevBoard, email);
+  const permissions = getBoardPermissions(role);
+
+  if (permissions.canAdmin) return true;
+
+  const prevRoles = prevBoard?.boardRoles || {};
+  const nextRoles = nextBoard?.boardRoles || {};
+  const rolesChanged = JSON.stringify(prevRoles) !== JSON.stringify(nextRoles);
+  const archiveChanged = asText(prevBoard?.archivedAt) !== asText(nextBoard?.archivedAt);
+
+  if (rolesChanged || archiveChanged) {
+    if (!silent) window.alert(`Permission denied: ${role} cannot change board roles or archive settings.`);
+    return false;
+  }
+
+  if (permissions.canEdit) return true;
+
+  if (permissions.canReview && isReviewOnlyBoardChange(prevBoard, nextBoard)) return true;
+  if (permissions.canRequest && isClientRequestOnlyBoardChange(prevBoard, nextBoard)) return true;
+
+  if (!silent) window.alert(`Permission denied: your board role is ${role}.`);
+  return false;
+}
+
+function canApplyBoardsMutation(prevBoards, nextBoards, email, silent = false) {
+  const prevList = asArray(prevBoards);
+  const nextList = asArray(nextBoards);
+  const prevById = new Map(prevList.map(b => [String(b.id), b]));
+  const nextById = new Map(nextList.map(b => [String(b.id), b]));
+
+  for (const prevBoard of prevList) {
+    if (!nextById.has(String(prevBoard.id))) {
+      const role = getBoardRole(prevBoard, email);
+      if (!getBoardPermissions(role).canAdmin) {
+        if (!silent) window.alert(`Permission denied: only Admin can delete board "${prevBoard.name}".`);
+        return false;
+      }
+    }
+  }
+
+  for (const nextBoard of nextList) {
+    const prevBoard = prevById.get(String(nextBoard.id));
+    if (!prevBoard) continue; // creating a new board is allowed
+    if (!canApplyBoardMutation(prevBoard, nextBoard, email, silent)) return false;
+  }
+
+  return true;
+}
+
+
+function teamMinimalNormalizeRole(value) {
+  const v = asText(value || "Viewer").trim().toLowerCase();
+  if (v === "admin") return "Admin";
+  if (v === "editor") return "Editor";
+  if (v === "reviewer") return "Reviewer";
+  if (v === "client") return "Client";
+  if (v === "viewer" || v === "view") return "Viewer";
+  return "Viewer";
+}
+
+function teamMinimalRole(board, email) {
+  const normalizedEmail = normalizeEmail(email);
+  const roleMap = board?.boardRoles && typeof board.boardRoles === "object" ? board.boardRoles : {};
+  const rows: any[] = Object.values(roleMap);
+
+  // Existing boards without role matrix remain fully editable for the owner/admin workflow.
+  if (rows.length === 0) return "Admin";
+  if (!normalizedEmail) return "Viewer";
+
+  const direct: any = roleMap[memberRoleKey(normalizedEmail)] || roleMap[normalizedEmail];
+  if (direct) return teamMinimalNormalizeRole(direct.role || direct);
+
+  const found: any = rows.find((r: any) => normalizeEmail(r?.email) === normalizedEmail);
+  return found ? teamMinimalNormalizeRole(found.role) : "Viewer";
+}
+
+function teamMinimalPermissions(role) {
+  const r = teamMinimalNormalizeRole(role);
+  return {
+    role: r,
+    canAdmin: r === "Admin",
+    canEdit: r === "Admin" || r === "Editor",
+    canReview: r === "Admin" || r === "Editor" || r === "Reviewer",
+    canComment: r === "Admin" || r === "Editor" || r === "Reviewer" || r === "Client",
+    canRequest: r === "Admin" || r === "Editor" || r === "Client",
+    isTeam: r !== "Admin",
+  };
+}
+
+function teamMinimalIsMine(item, email, name = "") {
+  const owner = asText(item?.owner);
+  const emailKey = normalizeEmail(email);
+  const nameKey = asText(name).trim().toLowerCase();
+  return !!owner && (
+    normalizeEmail(owner) === emailKey ||
+    owner.trim().toLowerCase() === nameKey ||
+    owner.trim().toLowerCase() === emailKey
+  );
+}
+
+function teamMinimalTaskRows(boards, email, name = "") {
+  const rows: any[] = [];
+  for (const board of asArray(boards).filter((b: any) => !b.archivedAt)) {
+    for (const group of asArray(board.groups)) {
+      for (const item of asArray(group.items)) {
+        if (teamMinimalIsMine(item, email, name)) rows.push({ board, group, item });
+      }
+    }
+  }
+  return rows;
+}
+
+function MyWorkPage({ boards, currentUserEmail, currentUserName, onPatchBoard, onOpenBoard, onOpenReport }: any) {
+  const { dark } = useDark();
+  const bg = dark ? "#0f0f1e" : "#f7f8fc";
+  const card = dark ? "#16213e" : "#fff";
+  const text = dark ? "#e0e0f0" : "#323338";
+  const sub = dark ? "#8888aa" : "#676879";
+  const bdr = dark ? "#2a2a4a" : "#eef1f7";
+
+  const [checkTaskId, setCheckTaskId] = useState("");
+  const [doneText, setDoneText] = useState("");
+  const [blockerText, setBlockerText] = useState("");
+  const [showDone, setShowDone] = useLocalStorage("holifriday_mywork_show_done", false);
+
+  const myRows = teamMinimalTaskRows(boards, currentUserEmail, currentUserName);
+  const openRows = myRows.filter(r => isOpenPlanningTask(r.item));
+  const doneRows = myRows.filter(r => !isOpenPlanningTask(r.item));
+  const displayRows = (showDone ? myRows : openRows).sort((a, b) => {
+    const ad = a.item.due || "9999-99-99";
+    const bd = b.item.due || "9999-99-99";
+    return ad.localeCompare(bd);
+  });
+  const today = new Date(new Date().toDateString());
+  const overdue = openRows.filter(r => isOverdue(r.item.due));
+  const dueToday = openRows.filter(r => {
+    const d = parseDateOnly(r.item.due);
+    return d && diffDays(today, d) === 0;
+  });
+  const review = myRows.filter(r => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(r.item.status));
+
+  const selectedForCheck = checkTaskId || displayRows[0]?.item?.id || "";
+
+  function patchTask(row, patch) {
+    if (!row?.board?.id || !row?.item?.id) return;
+    onPatchBoard?.(row.board.id, current => ({
+      ...current,
+      groups: asArray(current.groups).map(g => ({
+        ...g,
+        items: asArray(g.items).map(item => {
+          if (String(item.id) !== String(row.item.id)) return item;
+          const nextPatch = patch?.status && patch.status !== item.status
+            ? { ...patch, approvalHistory: [...asArray(item.approvalHistory), createApprovalHistoryEntry(item.status, patch.status, currentUserName || "You")] }
+            : patch;
+          return { ...item, ...nextPatch };
+        })
+      }))
+    }));
+  }
+
+  function quickStatus(row, status, commentText = "") {
+    const comment = commentText.trim()
+      ? { id: uid(), author: currentUserName || currentUserEmail || "You", text: commentText.trim(), mentions: extractMentions(commentText), time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }
+      : null;
+    patchTask(row, {
+      status,
+      comments: comment ? [...asArray(row.item.comments), comment] : asArray(row.item.comments),
+      tags: status === "Need Revision" ? uniqueStrings([...asArray(row.item.tags), "Need Help"]) : asArray(row.item.tags),
+    });
+  }
+
+  function submitCheckIn() {
+    const row = myRows.find(r => String(r.item.id) === String(selectedForCheck));
+    if (!row) {
+      window.alert("Select a task first.");
+      return;
+    }
+    if (!doneText.trim() && !blockerText.trim()) {
+      window.alert("Add a short update first.");
+      return;
+    }
+    const textLines = [
+      "Daily check-in",
+      doneText.trim() ? `Done: ${doneText.trim()}` : "",
+      blockerText.trim() ? `Blocker: ${blockerText.trim()}` : "",
+    ].filter(Boolean);
+    const comment = {
+      id: uid(),
+      author: currentUserName || currentUserEmail || "You",
+      text: textLines.join("\\n"),
+      mentions: extractMentions(textLines.join("\\n")),
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+    patchTask(row, { comments: [...asArray(row.item.comments), comment] });
+    setDoneText("");
+    setBlockerText("");
+    window.alert("Check-in submitted.");
+  }
+
+  function StatCard({ title, value, color, icon }: any) {
+    return (
+      <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 14 }}>
+        <div style={{ fontSize: 18 }}>{icon}</div>
+        <div style={{ marginTop: 5, fontSize: 26, fontWeight: 950, color }}>{value}</div>
+        <div style={{ fontSize: 11, color: sub, fontWeight: 800 }}>{title}</div>
+      </div>
+    );
+  }
+
+  function StatusButton({ children, onClick, color = "#0073ea" }: any) {
+    return (
+      <button onClick={onClick} style={{ border: "none", borderRadius: 8, background: color, color: "#fff", padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer", whiteSpace: "nowrap" }}>
+        {children}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: bg, padding: 24 }}>
+      <div style={{ maxWidth: 1160, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 950, color: text, letterSpacing: -0.7 }}>My Work</div>
+            <div style={{ marginTop: 4, fontSize: 13, color: sub }}>Only your tasks. Update with one click.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setShowDone((v: boolean) => !v)} style={{ border: `1px solid ${bdr}`, background: card, color: text, borderRadius: 9, padding: "8px 11px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>
+              {showDone ? "Hide done" : "Show done"}
+            </button>
+            <button onClick={onOpenReport} style={{ border: `1px solid ${bdr}`, background: card, color: text, borderRadius: 9, padding: "8px 11px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Open Report</button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
+          <StatCard icon="📌" title="Open tasks" value={openRows.length} color="#0073ea" />
+          <StatCard icon="⚠️" title="Overdue" value={overdue.length} color="#e2445c" />
+          <StatCard icon="📍" title="Due today" value={dueToday.length} color="#fdab3d" />
+          <StatCard icon="✅" title="Review queue" value={review.length} color="#579bfc" />
+          <StatCard icon="🏁" title="Done" value={doneRows.length} color="#00c875" />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,1.25fr) minmax(280px,.75fr)", gap: 16 }}>
+          <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 950, color: text }}>Task list</div>
+                <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Use the buttons. No need to open the full board.</div>
+              </div>
+            </div>
+
+            {displayRows.length === 0 ? (
+              <div style={{ padding: 28, textAlign: "center", border: `1px dashed ${bdr}`, borderRadius: 14 }}>
+                <div style={{ fontSize: 30 }}>🎉</div>
+                <div style={{ marginTop: 8, fontSize: 16, fontWeight: 900, color: text }}>No assigned tasks</div>
+                <div style={{ marginTop: 5, fontSize: 12, color: sub }}>When PM assigns work to you, it will appear here.</div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 9 }}>
+                {displayRows.map(row => {
+                  const item = row.item;
+                  const late = isOpenPlanningTask(item) && isOverdue(item.due);
+                  const due = parseDateOnly(item.due);
+                  const todayDue = due && diffDays(today, due) === 0;
+                  return (
+                    <div key={`${row.board.id}-${row.group.id}-${item.id}`} style={{ border: `1px solid ${bdr}`, borderLeft: `4px solid ${late ? "#e2445c" : todayDue ? "#fdab3d" : "#0073ea"}`, borderRadius: 12, padding: 12, background: dark ? "#101827" : "#fff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 950, color: text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                          <div style={{ marginTop: 3, fontSize: 11, color: sub }}>{row.board.name} / {row.group.name} • due {item.due || "—"}</div>
+                        </div>
+                        <span style={{ height: 22, background: late ? "#fde8ec" : "#eef4ff", color: late ? "#e2445c" : "#1f5ecf", borderRadius: 999, padding: "3px 8px", fontSize: 10, fontWeight: 900, whiteSpace: "nowrap" }}>{item.status}</span>
+                      </div>
+                      <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap" }}>
+                        <StatusButton onClick={() => quickStatus(row, "In Progress")} color="#0073ea">Start</StatusButton>
+                        <StatusButton onClick={() => quickStatus(row, "Done")} color="#00c875">Done</StatusButton>
+                        <StatusButton onClick={() => quickStatus(row, "Need Revision", "Need help / blocker reported.")} color="#e2445c">Need Help</StatusButton>
+                        <StatusButton onClick={() => quickStatus(row, "Ready for PM Review")} color="#579bfc">Send to Review</StatusButton>
+                        <button onClick={() => onOpenBoard(row.board.id)} style={{ border: `1px solid ${bdr}`, background: card, color: text, borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Open</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "grid", gap: 16 }}>
+            <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 950, color: text }}>Daily check-in</div>
+              <div style={{ fontSize: 12, color: sub, marginTop: 2 }}>Send one short update to the task comments.</div>
+              <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                <select value={String(selectedForCheck)} onChange={e => setCheckTaskId(e.target.value)} style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "8px 9px", background: card, color: text, fontSize: 12 }}>
+                  {myRows.map(row => <option key={row.item.id} value={String(row.item.id)}>{row.item.name}</option>)}
+                </select>
+                <textarea value={doneText} onChange={e => setDoneText(e.target.value)} placeholder="What did you work on?" style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: 9, background: card, color: text, minHeight: 72, fontSize: 12 }} />
+                <textarea value={blockerText} onChange={e => setBlockerText(e.target.value)} placeholder="Any blocker? Leave blank if none." style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: 9, background: card, color: text, minHeight: 72, fontSize: 12 }} />
+                <button onClick={submitCheckIn} style={{ border: "none", borderRadius: 9, background: "#0073ea", color: "#fff", padding: "9px 12px", fontSize: 12, fontWeight: 950, cursor: "pointer" }}>Submit check-in</button>
+              </div>
+            </div>
+
+            <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16 }}>
+              <div style={{ fontSize: 15, fontWeight: 950, color: text }}>How to use</div>
+              <div style={{ marginTop: 10, display: "grid", gap: 9 }}>
+                {[
+                  ["1", "Start when you begin work."],
+                  ["2", "Done when your part is finished."],
+                  ["3", "Need Help if you are blocked."],
+                  ["4", "Send to Review when PM should check."],
+                ].map(([n, msg]) => (
+                  <div key={n} style={{ display: "flex", gap: 9 }}>
+                    <div style={{ width: 22, height: 22, borderRadius: 999, background: "#eef4ff", color: "#0073ea", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 950 }}>{n}</div>
+                    <div style={{ fontSize: 12, color: sub, lineHeight: 1.45 }}>{msg}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function HomeTodayPage({ boards, activeBoard, currentUserEmail, onOpenBoard, onOpenReport, onCreateBoard, onQuickAddTask }: any) {
   const { dark } = useDark();
@@ -5151,6 +5596,8 @@ function AppContent() {
 
   const activeBoards = asArray(boards).filter((b: any) => !b.archivedAt);
   const activeBoard = activeBoards.find((b: any) => b.id === activeId) || activeBoards[0] || boards[0];
+  const activeBoardMinimalRole = teamMinimalRole(activeBoard, authUser?.email);
+  const activeBoardMinimalPerms = teamMinimalPermissions(activeBoardMinimalRole);
   const inviteTarget = useMemo(() => resolveInviteTarget(boards, inviteToken), [boards, inviteToken]);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [jumpItemId, setJumpItemId] = useState<any>(null);
@@ -5174,6 +5621,13 @@ function AppContent() {
     setJumpItemId(itemId);
   }
 
+  useEffect(() => {
+    if (!boardsFirebaseLoaded || !authUser?.email || !activeBoard) return;
+    if (activeBoardMinimalPerms.isTeam && activeView === "home") {
+      setActiveView("mywork");
+    }
+  }, [boardsFirebaseLoaded, authUser?.email, activeBoard?.id, activeBoardMinimalPerms.isTeam, activeView]);
+
   // Due-date notification: show banner for overdue + due-soon tasks on load
   useEffect(() => {
     if (!boardsFirebaseLoaded || !authUser?.email) return;
@@ -5195,6 +5649,7 @@ function AppContent() {
     if (!localPrevBoard) return;
 
     const localNextRaw = updater(localPrevBoard);
+    if (!canApplyBoardMutation(localPrevBoard, localNextRaw, authUser?.email)) return;
     const localNextBoard = stampBoardTaskMetadata(localPrevBoard, localNextRaw, actorEmail);
 
     // Optimistic update: reflect the selected status/priority immediately.
@@ -5239,6 +5694,13 @@ function AppContent() {
 
   const patchBoardById = (boardId, updater) => {
     applyBoardPatch(boardId, updater);
+  };
+
+  const guardedSetBoards = (updater: any) => {
+    setBoards(prevBoards => {
+      const nextBoards = typeof updater === "function" ? updater(prevBoards) : updater;
+      return canApplyBoardsMutation(prevBoards, nextBoards, authUser?.email) ? nextBoards : prevBoards;
+    });
   };
 
   const resolveMergeConflict = (strategy: "mine" | "server" | "smart") => {
@@ -5314,6 +5776,12 @@ function AppContent() {
   const deleteBoard = boardId => {
     const target = asArray(boards).find(b => b.id === boardId);
     if (!target) return;
+
+    const deleteRole = getBoardRole(target, authUser?.email);
+    if (!getBoardPermissions(deleteRole).canAdmin) {
+      window.alert("Permission denied: only Admin can delete this board.");
+      return;
+    }
 
     if (asArray(boards).length <= 1) {
       window.alert("You need at least one board. Create another board before deleting this one.");
@@ -5591,8 +6059,8 @@ function AppContent() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${dark ? "#2a2a4a" : "#eceef5"}`, background: dark ? "#16213e" : "#fafbff" }}>
           <div style={{ fontSize: 12, color: dark ? "#8888aa" : "#676879" }}>Signed in as: <strong style={{ color: dark ? "#e0e0f0" : "#323338" }}>{authUser.displayName || authUser.email}</strong> ({authUser.email})</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={() => setSimpleMode((v: boolean) => !v)} title="Switch between simple and advanced mode" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
-              {simpleMode ? "Simple mode" : "Advanced mode"}
+            <button onClick={() => { if (activeBoardMinimalPerms.canAdmin) setSimpleMode((v: boolean) => !v); }} title={activeBoardMinimalPerms.canAdmin ? "Switch between simple and advanced mode" : "Team users stay in minimal mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              {activeBoardMinimalPerms.isTeam ? "Team mode" : simpleMode ? "Simple mode" : "Advanced mode"}
             </button>
             <button onClick={() => {
               const name = window.prompt("Task name");
@@ -5647,7 +6115,9 @@ function AppContent() {
             <div style={{ fontSize: 12, color: "#1f5ecf", fontWeight: 700 }}>⏳ Joining group, please wait...</div>
           </div>
         )}
-        {activeView === "home"
+        {activeView === "mywork"
+          ? <MyWorkPage boards={boards} currentUserEmail={authUser.email} currentUserName={authUser.displayName || authUser.email} onPatchBoard={patchBoardById} onOpenBoard={(boardId?: any) => { if (boardId) setActiveId(boardId); setActiveView("boards"); }} onOpenReport={() => setActiveView("dashboard")} />
+          : activeView === "home"
           ? <HomeTodayPage
               boards={boards}
               activeBoard={activeBoard}
@@ -5667,7 +6137,7 @@ function AppContent() {
               }}
             />
           : activeView === "dashboard"
-            ? <Dashboard boards={boards} onPatchBoard={patchBoardById} onSetBoards={setBoards} simpleMode={simpleMode} />
+            ? <Dashboard boards={boards} onPatchBoard={patchBoardById} onSetBoards={guardedSetBoards} simpleMode={simpleMode || activeBoardMinimalPerms.isTeam} currentUserEmail={authUser.email} />
             : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onPatchBoard={patchBoardById} onCelebrate={celebrate} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} jumpItemId={jumpItemId} onJumpHandled={() => setJumpItemId(null)} />
         }
       </div>
