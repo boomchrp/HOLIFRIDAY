@@ -3623,15 +3623,23 @@ function Dashboard({ boards, onPatchBoard, onSetBoards, simpleMode = true }: any
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
         <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: text }}>📊 Dashboard</h2>
         <div style={{ display: "flex", gap: 6, background: card, border: `1px solid ${bdr}`, borderRadius: 999, padding: 4 }}>
-          {[
-            ["overview", "Overview"],
-            ["planning", "Planning"],
-            ["availability", "Team Calendar"],
-            ["pmSuite", "Tools"],
-            ["advanced", "Planning"],
-            ["governance", "Settings"],
-            ["reviews", "Review"],
-          ].map(([key, label]) => (
+          {(simpleMode
+          ? [
+              ["overview", "Overview"],
+              ["team", "Team"],
+              ["reviews", "Review"],
+            ]
+          : [
+              ["overview", "Overview"],
+              ["planning", "Planning"],
+              ["gantt", "Timeline"],
+              ["team", "Team"],
+              ["availability", "Team Calendar"],
+              ["pmSuite", "Tools"],
+              ["advanced", "Planning Pro"],
+              ["governance", "Settings"],
+              ["reviews", "Review"],
+            ]).map(([key, label]) => (
             <button key={key} onClick={() => setDashTab(key)} style={{ border: "none", borderRadius: 999, padding: "6px 12px", background: dashTab === key ? "#0073ea" : "transparent", color: dashTab === key ? "#fff" : sub, fontSize: 12, fontWeight: 900, cursor: "pointer" }}>{label}</button>
           ))}
         </div>
