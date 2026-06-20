@@ -5025,6 +5025,351 @@ function teamMinimalTaskRows(boards, email, name = "") {
   return rows;
 }
 
+
+function hfUxArray(value: any) {
+  return Array.isArray(value) ? value : [];
+}
+
+function hfUxText(value: any) {
+  return String(value ?? "");
+}
+
+function hfUxUid() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function hfUxDatePlus(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function hfUxIsOpenTask(item: any) {
+  return !["Done", "Approved", "Cancelled", "Archived"].includes(hfUxText(item?.status));
+}
+
+function hfUxIsOverdue(item: any) {
+  if (!hfUxIsOpenTask(item) || !item?.due) return false;
+  const d = new Date(`${item.due}T00:00:00`);
+  const today = new Date(new Date().toDateString());
+  return Number.isFinite(d.getTime()) && d < today;
+}
+
+function hfUxBoardProgress(board: any) {
+  const tasks = hfUxArray(board?.groups).flatMap((g: any) => hfUxArray(g.items));
+  const done = tasks.filter((t: any) => !hfUxIsOpenTask(t)).length;
+  return {
+    total: tasks.length,
+    done,
+    pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0,
+  };
+}
+
+function hfUxTask(owner: string, name: string, dueOffset = 3, tags: string[] = []) {
+  return {
+    id: hfUxUid(),
+    name,
+    owner: owner || "No owner",
+    status: "Not Started",
+    priority: "Medium",
+    start: hfUxDatePlus(0),
+    due: hfUxDatePlus(dueOffset),
+    pmReviewDate: hfUxDatePlus(Math.max(1, dueOffset - 1)),
+    effortHours: 4,
+    reviewBufferDays: 1,
+    revisionBufferDays: 1,
+    tags,
+    comments: [],
+    subtasks: [],
+  };
+}
+
+function hfUxBuildTemplateBoard(type: string, ownerEmail: string, ownerName = "") {
+  const owner = ownerEmail || ownerName || "No owner";
+  const base: any = {
+    id: hfUxUid(),
+    name: type,
+    archivedAt: "",
+    createdAt: new Date().toISOString(),
+    boardRoles: ownerEmail ? { [normalizeEmail(ownerEmail)]: { email: ownerEmail, name: ownerName || ownerEmail, role: "Admin" } } : {},
+    groups: [],
+  };
+
+  if (type === "Engineering Report") {
+    base.name = "Engineering Report Project";
+    base.groups = [
+      { id: hfUxUid(), name: "01 Data & Inputs", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Collect input data and references", 2, ["Data"]),
+        hfUxTask(owner, "Confirm design criteria and assumptions", 3, ["Criteria"]),
+      ]},
+      { id: hfUxUid(), name: "02 Analysis", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Run model / calculation", 5, ["Analysis"]),
+        hfUxTask(owner, "Export key figures and tables", 6, ["Figure"]),
+      ]},
+      { id: hfUxUid(), name: "03 Report", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Draft methodology section", 7, ["Report"]),
+        hfUxTask(owner, "Draft results and conclusion", 8, ["Report"]),
+      ]},
+      { id: hfUxUid(), name: "04 Review", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "PM review", 9, ["Review"]),
+        hfUxTask(owner, "Final submission", 10, ["Deliverable"]),
+      ]},
+    ];
+  } else if (type === "Client Review") {
+    base.name = "Client Review Project";
+    base.groups = [
+      { id: hfUxUid(), name: "Client Requests", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Collect client comments", 2, ["Request"]),
+        hfUxTask(owner, "Classify comments by priority", 3, ["Review"]),
+      ]},
+      { id: hfUxUid(), name: "Internal Response", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Prepare response table", 5, ["Response"]),
+        hfUxTask(owner, "Send revised document to client", 7, ["Deliverable"]),
+      ]},
+    ];
+  } else {
+    base.name = "General Project";
+    base.groups = [
+      { id: hfUxUid(), name: "To Do", collapsed: false, memberRoles: {}, items: [
+        hfUxTask(owner, "Define scope", 2, ["Planning"]),
+        hfUxTask(owner, "Assign work", 3, ["Planning"]),
+      ]},
+      { id: hfUxUid(), name: "Doing", collapsed: false, memberRoles: {}, items: [] },
+      { id: hfUxUid(), name: "Review", collapsed: false, memberRoles: {}, items: [] },
+      { id: hfUxUid(), name: "Done", collapsed: false, memberRoles: {}, items: [] },
+    ];
+  }
+
+  return base;
+}
+
+function PMAlertsPage({ boards, onOpenBoard }: any) {
+  const rows = hfUxArray(boards).flatMap((board: any) =>
+    hfUxArray(board.groups).flatMap((group: any) =>
+      hfUxArray(group.items).map((item: any) => ({ board, group, item }))
+    )
+  );
+
+  const blockers = rows.filter((r: any) => hfUxArray(r.item.tags).includes("Need Help") || ["Blocked", "Need Revision"].includes(r.item.status));
+  const overdue = rows.filter((r: any) => hfUxIsOverdue(r.item));
+  const review = rows.filter((r: any) => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(r.item.status));
+
+  function AlertSection({ title, items, icon, color }: any) {
+    return (
+      <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 14, padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <span>{icon}</span>
+          <b style={{ color: "#323338" }}>{title}</b>
+          <span style={{ marginLeft: "auto", color, fontWeight: 950 }}>{items.length}</span>
+        </div>
+        {items.length === 0 ? (
+          <div style={{ color: "#676879", fontSize: 12 }}>Nothing here.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 8 }}>
+            {items.slice(0, 12).map((r: any) => (
+              <div key={`${r.board.id}-${r.group.id}-${r.item.id}`} style={{ border: "1px solid #f1f2f6", borderLeft: `4px solid ${color}`, borderRadius: 10, padding: 10 }}>
+                <div style={{ fontWeight: 900, fontSize: 13 }}>{r.item.name}</div>
+                <div style={{ color: "#676879", fontSize: 11, marginTop: 3 }}>{r.board.name} / {r.group.name} • {r.item.owner || "No owner"} • due {r.item.due || "—"}</div>
+                <button onClick={() => onOpenBoard?.(r.board.id, r.item.id)} style={{ marginTop: 8, border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Open</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: "#f7f8fc", padding: 24 }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <h1 style={{ margin: 0, color: "#323338" }}>PM Alerts</h1>
+        <div style={{ color: "#676879", fontSize: 13, marginTop: 4, marginBottom: 16 }}>Blockers, overdue tasks, and PM review queue.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 14 }}>
+          <AlertSection title="Need help / blockers" items={blockers} icon="🚨" color="#e2445c" />
+          <AlertSection title="Overdue" items={overdue} icon="⏰" color="#fdab3d" />
+          <AlertSection title="Ready for PM review" items={review} icon="👀" color="#579bfc" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PMReviewInboxPage({ boards, onPatchBoard, onOpenBoard, currentUserName }: any) {
+  const rows = hfUxArray(boards).flatMap((board: any) =>
+    hfUxArray(board.groups).flatMap((group: any) =>
+      hfUxArray(group.items)
+        .filter((item: any) => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(item.status))
+        .map((item: any) => ({ board, group, item }))
+    )
+  );
+
+  function updateStatus(row: any, status: string, commentText = "") {
+    onPatchBoard?.(row.board.id, (current: any) => ({
+      ...current,
+      groups: hfUxArray(current.groups).map((g: any) => ({
+        ...g,
+        items: hfUxArray(g.items).map((item: any) => {
+          if (String(item.id) !== String(row.item.id)) return item;
+          const comment = commentText ? { id: hfUxUid(), author: currentUserName || "PM", text: commentText, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) } : null;
+          return {
+            ...item,
+            status,
+            comments: comment ? [...hfUxArray(item.comments), comment] : hfUxArray(item.comments),
+            approvalHistory: [...hfUxArray(item.approvalHistory), { id: hfUxUid(), from: item.status, to: status, by: currentUserName || "PM", at: new Date().toISOString() }],
+          };
+        })
+      }))
+    }));
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: "#f7f8fc", padding: 24 }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <h1 style={{ margin: 0, color: "#323338" }}>PM Review Inbox</h1>
+        <div style={{ color: "#676879", fontSize: 13, marginTop: 4, marginBottom: 16 }}>Tasks waiting for PM decision.</div>
+        {rows.length === 0 ? (
+          <div style={{ background: "#fff", border: "1px dashed #d8dbe4", borderRadius: 14, padding: 30, textAlign: "center" }}>
+            <div style={{ fontSize: 34 }}>🎉</div>
+            <div style={{ fontWeight: 950, marginTop: 8 }}>No tasks waiting for review</div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {rows.map((r: any) => (
+              <div key={`${r.board.id}-${r.group.id}-${r.item.id}`} style={{ background: "#fff", border: "1px solid #eef1f7", borderLeft: "4px solid #579bfc", borderRadius: 12, padding: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 950, color: "#323338" }}>{r.item.name}</div>
+                    <div style={{ color: "#676879", fontSize: 11, marginTop: 3 }}>{r.board.name} / {r.group.name} • {r.item.owner || "No owner"} • due {r.item.due || "—"}</div>
+                  </div>
+                  <span style={{ background: "#eef4ff", color: "#1f5ecf", borderRadius: 999, padding: "4px 8px", fontSize: 11, fontWeight: 900, height: 24 }}>{r.item.status}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                  <button onClick={() => updateStatus(r, "Approved", "Approved by PM.")} style={{ border: "none", background: "#00c875", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Approve</button>
+                  <button onClick={() => updateStatus(r, "Need Revision", window.prompt("What should be revised?", "Please revise and resubmit.") || "Please revise and resubmit.")} style={{ border: "none", background: "#e2445c", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Request Revision</button>
+                  <button onClick={() => updateStatus(r, "PM Reviewing")} style={{ border: "none", background: "#579bfc", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Mark Reviewing</button>
+                  <button onClick={() => onOpenBoard?.(r.board.id, r.item.id)} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#323338", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Open task</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ClientViewPage({ boards, onPatchBoard, currentUserName, currentUserEmail }: any) {
+  const activeBoards = hfUxArray(boards).filter((b: any) => !b.archivedAt);
+  const [requestText, setRequestText] = useState("");
+  const summary = activeBoards.reduce((acc: any, b: any) => {
+    const pr = hfUxBoardProgress(b);
+    acc.total += pr.total;
+    acc.done += pr.done;
+    return acc;
+  }, { total: 0, done: 0 });
+  const pct = summary.total ? Math.round((summary.done / summary.total) * 100) : 0;
+  const deliverables = activeBoards.flatMap((b: any) => hfUxArray(b.groups).flatMap((g: any) => hfUxArray(g.items).filter((i: any) => hfUxArray(i.tags).includes("Deliverable")).map((i: any) => ({ board: b, group: g, item: i }))));
+
+  function submitRequest() {
+    const text = requestText.trim();
+    if (!text) return window.alert("Add request detail first.");
+    const board = activeBoards[0];
+    if (!board) return window.alert("No board available.");
+    onPatchBoard?.(board.id, (current: any) => {
+      const groups = hfUxArray(current.groups);
+      const firstGroup = groups[0] || { id: hfUxUid(), name: "Client Requests", collapsed: false, memberRoles: {}, items: [] };
+      const requestItem = {
+        id: hfUxUid(),
+        name: text.slice(0, 80),
+        owner: currentUserEmail || currentUserName || "Client",
+        status: "Not Started",
+        priority: "Medium",
+        start: hfUxDatePlus(0),
+        due: hfUxDatePlus(3),
+        pmReviewDate: hfUxDatePlus(2),
+        effortHours: 2,
+        reviewBufferDays: 1,
+        revisionBufferDays: 1,
+        tags: ["Request"],
+        comments: [{ id: hfUxUid(), author: currentUserName || currentUserEmail || "Client", text, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }],
+        subtasks: [],
+      };
+      if (groups.length === 0) return { ...current, groups: [{ ...firstGroup, items: [requestItem] }] };
+      return { ...current, groups: groups.map((g: any, idx: number) => idx === 0 ? { ...g, items: [requestItem, ...hfUxArray(g.items)] } : g) };
+    });
+    setRequestText("");
+    window.alert("Request submitted.");
+  }
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: "#f7f8fc", padding: 24 }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+        <h1 style={{ margin: 0, color: "#323338" }}>Client View</h1>
+        <div style={{ color: "#676879", fontSize: 13, marginTop: 4, marginBottom: 16 }}>Simple progress and request page for clients.</div>
+        <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 16, padding: 18, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14 }}>
+            <div>
+              <div style={{ color: "#676879", fontSize: 12, fontWeight: 800 }}>Overall progress</div>
+              <div style={{ fontSize: 32, fontWeight: 950, color: "#323338" }}>{pct}%</div>
+              <div style={{ color: "#676879", fontSize: 12 }}>{summary.done} of {summary.total} tasks complete</div>
+            </div>
+            <div style={{ flex: 1, height: 12, background: "#eef1f7", borderRadius: 999, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, height: "100%", background: "#00c875" }} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,1fr) minmax(280px,1fr)", gap: 16 }}>
+          <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 14, padding: 16 }}>
+            <div style={{ fontWeight: 950, marginBottom: 10 }}>Deliverables</div>
+            {deliverables.length === 0 ? <div style={{ color: "#676879", fontSize: 12 }}>No deliverables marked yet.</div> : deliverables.map((r: any) => (
+              <div key={r.item.id} style={{ border: "1px solid #f1f2f6", borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                <div style={{ fontWeight: 900 }}>{r.item.name}</div>
+                <div style={{ color: "#676879", fontSize: 11 }}>{r.board.name} • {r.item.status}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 14, padding: 16 }}>
+            <div style={{ fontWeight: 950 }}>Submit request</div>
+            <div style={{ color: "#676879", fontSize: 12, marginTop: 3 }}>Use this instead of editing the internal plan.</div>
+            <textarea value={requestText} onChange={e => setRequestText(e.target.value)} placeholder="Write your request or comment..." style={{ width: "100%", minHeight: 110, marginTop: 12, border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }} />
+            <button onClick={submitRequest} style={{ marginTop: 10, border: "none", background: "#0073ea", color: "#fff", borderRadius: 9, padding: "9px 12px", fontSize: 12, fontWeight: 950, cursor: "pointer" }}>Send request</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectTemplatesPage({ onCreateTemplate, onBack }: any) {
+  const templates = [
+    { name: "Engineering Report", icon: "📘", desc: "Data, analysis, report, PM review, final submission." },
+    { name: "Client Review", icon: "💬", desc: "Client comments, response table, revised submission." },
+    { name: "General Project", icon: "📋", desc: "Simple To Do / Doing / Review / Done board." },
+  ];
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: "#f7f8fc", padding: 24 }}>
+      <div style={{ maxWidth: 960, margin: "0 auto" }}>
+        <button onClick={onBack} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#323338", borderRadius: 9, padding: "8px 11px", fontSize: 12, fontWeight: 900, cursor: "pointer", marginBottom: 14 }}>← Back</button>
+        <h1 style={{ margin: 0, color: "#323338" }}>Project Templates</h1>
+        <div style={{ color: "#676879", fontSize: 13, marginTop: 4, marginBottom: 16 }}>Start a project without building the board from scratch.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 14 }}>
+          {templates.map(t => (
+            <div key={t.name} style={{ background: "#fff", border: "1px solid #eef1f7", borderRadius: 16, padding: 18 }}>
+              <div style={{ fontSize: 34 }}>{t.icon}</div>
+              <div style={{ marginTop: 8, fontSize: 17, fontWeight: 950, color: "#323338" }}>{t.name}</div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#676879", lineHeight: 1.5 }}>{t.desc}</div>
+              <button onClick={() => onCreateTemplate(t.name)} style={{ marginTop: 14, border: "none", background: "#0073ea", color: "#fff", borderRadius: 9, padding: "9px 12px", fontSize: 12, fontWeight: 950, cursor: "pointer" }}>Use template</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MyWorkPage({ boards, currentUserEmail, currentUserName, onPatchBoard, onOpenBoard, onOpenReport }: any) {
   const { dark } = useDark();
   const bg = dark ? "#0f0f1e" : "#f7f8fc";
@@ -5188,7 +5533,7 @@ function MyWorkPage({ boards, currentUserEmail, currentUserName, onPatchBoard, o
                       <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap" }}>
                         <StatusButton onClick={() => quickStatus(row, "In Progress")} color="#0073ea">Start</StatusButton>
                         <StatusButton onClick={() => quickStatus(row, "Done")} color="#00c875">Done</StatusButton>
-                        <StatusButton onClick={() => quickStatus(row, "Need Revision", "Need help / blocker reported.")} color="#e2445c">Need Help</StatusButton>
+                        <StatusButton onClick={() => quickStatus(row, "Need Revision", window.prompt("What is blocking you?", "Need help / blocker reported.") || "Need help / blocker reported.")} color="#e2445c">Need Help</StatusButton>
                         <StatusButton onClick={() => quickStatus(row, "Ready for PM Review")} color="#579bfc">Send to Review</StatusButton>
                         <button onClick={() => onOpenBoard(row.board.id)} style={{ border: `1px solid ${bdr}`, background: card, color: text, borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Open</button>
                       </div>
@@ -5408,7 +5753,7 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onDelete, onCh
 
       {/* Nav */}
       <div style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
-        {[["home","🏠","Home"],["boards","📋","Board"],["dashboard","📊","Report"]].map(([v,icon,label]) => (
+        {[["home","🏠","Home"],["mywork","✅","My Work"],["boards","📋","Board"],["dashboard","📊","Report"],["reviewInbox","👀","Review"],["alerts","🚨","Alerts"],["client","🧾","Client"]].map(([v,icon,label]) => (
           <button key={v} onClick={() => onChangeView(v)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: open ? "8px 14px" : "8px 0", justifyContent: open ? "flex-start" : "center", background: activeView === v ? "rgba(255,255,255,.12)" : "none", border: "none", cursor: "pointer", color: activeView === v ? "#fff" : "rgba(255,255,255,.45)", fontSize: 13, transition: "background .15s" }}
             onMouseEnter={e => { if (activeView !== v) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
             onMouseLeave={e => { if (activeView !== v) e.currentTarget.style.background = "none"; }}
@@ -5619,6 +5964,19 @@ function AppContent() {
     setActiveId(boardId);
     setActiveView("boards");
     setJumpItemId(itemId);
+  }
+
+  function createProjectTemplate(type: string) {
+    const board = hfUxBuildTemplateBoard(type, authUser?.email || "", authUser?.displayName || authUser?.email || "");
+    setBoards(prev => [...hfUxArray(prev), board]);
+    setActiveId(board.id);
+    setActiveView("boards");
+  }
+
+  function openBoardFromUxPage(boardId: any, itemId: any = null) {
+    if (boardId) setActiveId(boardId);
+    setActiveView("boards");
+    if (itemId) setJumpItemId(itemId);
   }
 
   useEffect(() => {
@@ -6115,7 +6473,15 @@ function AppContent() {
             <div style={{ fontSize: 12, color: "#1f5ecf", fontWeight: 700 }}>⏳ Joining group, please wait...</div>
           </div>
         )}
-        {activeView === "mywork"
+        {activeView === "templates"
+          ? <ProjectTemplatesPage onCreateTemplate={createProjectTemplate} onBack={() => setActiveView("home")} />
+          : activeView === "reviewInbox"
+          ? <PMReviewInboxPage boards={boards} onPatchBoard={patchBoardById} onOpenBoard={openBoardFromUxPage} currentUserName={authUser.displayName || authUser.email} />
+          : activeView === "alerts"
+          ? <PMAlertsPage boards={boards} onOpenBoard={openBoardFromUxPage} />
+          : activeView === "client"
+          ? <ClientViewPage boards={boards} onPatchBoard={patchBoardById} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} />
+          : activeView === "mywork"
           ? <MyWorkPage boards={boards} currentUserEmail={authUser.email} currentUserName={authUser.displayName || authUser.email} onPatchBoard={patchBoardById} onOpenBoard={(boardId?: any) => { if (boardId) setActiveId(boardId); setActiveView("boards"); }} onOpenReport={() => setActiveView("dashboard")} />
           : activeView === "home"
           ? <HomeTodayPage
