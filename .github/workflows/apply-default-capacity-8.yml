@@ -1,0 +1,77 @@
+name: Apply default capacity 8h
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-default-capacity-8.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Patch App.tsx
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("holifriday-app/src/App.tsx")
+          s = p.read_text(encoding="utf-8")
+          old = s
+
+          replacements = [
+              ("function getRequiredWorkDays(task, capacityHoursPerDay = 6)", "function getRequiredWorkDays(task, capacityHoursPerDay = 8)"),
+              ("function getOwnerCapacity(board, owner, fallback = 6)", "function getOwnerCapacity(board, owner, fallback = 8)"),
+              ("function getOwnerCapacityForDate(board, owner, dateKey, fallback = 6)", "function getOwnerCapacityForDate(board, owner, dateKey, fallback = 8)"),
+              ("function getPlanningAnalysis(task, capacityHoursPerDay = 6)", "function getPlanningAnalysis(task, capacityHoursPerDay = 8)"),
+              ("const [capacity, setCapacity] = useState(6);", "const [capacity, setCapacity] = useState(8);"),
+              ("getOwnerCapacity(board, item.owner, 6)", "getOwnerCapacity(board, item.owner, 8)"),
+              ("getOwnerCapacity(board,item.owner,6)", "getOwnerCapacity(board,item.owner,8)"),
+              ("getOwnerCapacity(board, owner, 6)", "getOwnerCapacity(board, owner, 8)"),
+              ("getOwnerCapacity(board,owner,6)", "getOwnerCapacity(board,owner,8)"),
+              ("getOwnerCapacity(board, ownerName, 6)", "getOwnerCapacity(board, ownerName, 8)"),
+              ("getOwnerCapacity(board,ownerName,6)", "getOwnerCapacity(board,ownerName,8)"),
+              ("getOwnerCapacityForDate(board,owner,date,6)", "getOwnerCapacityForDate(board,owner,date,8)"),
+              ("getOwnerCapacityForDate(board, owner, date, 6)", "getOwnerCapacityForDate(board, owner, date, 8)"),
+              ("getOwnerCapacityForDate(board,owner,dateKey,6)", "getOwnerCapacityForDate(board,owner,dateKey,8)"),
+              ("getOwnerCapacityForDate(board, owner, dateKey, 6)", "getOwnerCapacityForDate(board, owner, dateKey, 8)"),
+          ]
+
+          changed = 0
+          for a, b in replacements:
+              if a in s:
+                  s = s.replace(a, b)
+                  changed += 1
+
+          p.write_text(s, encoding="utf-8")
+          print(f"Updated {changed} default capacity reference(s).")
+          if s == old:
+              print("No App.tsx capacity changes were needed.")
+          PY
+
+      - name: Install and build
+        working-directory: holifriday-app
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Commit patched app and remove workflow
+        run: |
+          rm -f .github/workflows/apply-default-capacity-8.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "Set default capacity to 8 hours per day"
+            git push
+          else
+            echo "Nothing to commit"
+          fi
