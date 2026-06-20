@@ -635,6 +635,7 @@ function normalizeBoards(value, fallback = []) {
     id: board?.id ?? uid(),
     name: asText(board?.name, `Board ${index + 1}`),
     color: asText(board?.color, GROUP_COLORS[index % GROUP_COLORS.length]),
+    resourceCapacity: board?.resourceCapacity && typeof board.resourceCapacity === "object" ? board.resourceCapacity : {},
     groups: asArray(board?.groups).map((group, groupIndex) => normalizeGroup(group, groupIndex)),
     activityLogs: trimActivityLogs(asArray(board?.activityLogs).map(log => ({
       id: log?.id ?? uid(),
@@ -912,6 +913,83 @@ function setOwnerCapacityOnBoard(board, owner, hoursPerDay) {
     },
   };
 }
+
+
+function getOwnerResourceEntry(board, owner) {
+  const capMap = getBoardResourceCapacity(board);
+  const entry = capMap[capacityKey(owner)];
+  return entry && typeof entry === "object" ? entry : { hoursPerDay: entry };
+}
+
+function getOwnerUnavailableDates(board, owner) {
+  const entry = getOwnerResourceEntry(board, owner);
+  return uniqueStrings(asArray(entry?.unavailableDates).map(d => asText(d)).filter(Boolean)).sort();
+}
+
+function getOwnerUnavailableReason(board, owner, dateKey) {
+  const entry = getOwnerResourceEntry(board, owner);
+  const reasons = entry?.unavailableReasons && typeof entry.unavailableReasons === "object" ? entry.unavailableReasons : {};
+  return asText(reasons?.[dateKey], "");
+}
+
+function isOwnerUnavailable(board, owner, dateKey) {
+  return getOwnerUnavailableDates(board, owner).includes(asText(dateKey));
+}
+
+function getOwnerCapacityForDate(board, owner, dateKey, fallback = 6) {
+  return isOwnerUnavailable(board, owner, dateKey) ? 0 : getOwnerCapacity(board, owner, fallback);
+}
+
+function getDateRangeKeys(startDate, endDate) {
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate || startDate);
+  if (!start || !end) return [];
+  const a = start <= end ? start : end;
+  const b = start <= end ? end : start;
+  const keys = [];
+  for (let d = new Date(a); d <= b; d = addDays(d, 1)) keys.push(d.toISOString().slice(0, 10));
+  return keys;
+}
+
+function setOwnerAvailabilityRangeOnBoard(board, owner, startDate, endDate, unavailable = true, reason = "") {
+  const ownerName = normalizeOwner(owner);
+  if (!ownerName || ownerName === "No owner") return board;
+  const dates = getDateRangeKeys(startDate, endDate || startDate);
+  if (dates.length === 0) return board;
+
+  const key = capacityKey(ownerName);
+  const capMap = getBoardResourceCapacity(board);
+  const currentEntry = getOwnerResourceEntry(board, ownerName);
+  const currentDates = new Set(getOwnerUnavailableDates(board, ownerName));
+  const currentReasons = currentEntry?.unavailableReasons && typeof currentEntry.unavailableReasons === "object" ? { ...currentEntry.unavailableReasons } : {};
+  const note = asText(reason, "");
+
+  for (const dateKey of dates) {
+    if (unavailable) {
+      currentDates.add(dateKey);
+      if (note) currentReasons[dateKey] = note;
+    } else {
+      currentDates.delete(dateKey);
+      delete currentReasons[dateKey];
+    }
+  }
+
+  return {
+    ...board,
+    resourceCapacity: {
+      ...capMap,
+      [key]: {
+        ...currentEntry,
+        owner: ownerName,
+        hoursPerDay: getOwnerCapacity(board, ownerName, 6),
+        unavailableDates: Array.from(currentDates).sort(),
+        unavailableReasons: currentReasons,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
 
 function getPlanningAnalysis(task, capacityHoursPerDay = 6) {
   const today = new Date(new Date().toDateString());
@@ -1846,11 +1924,14 @@ function TeamScheduleView({ board, onOpen }: any) {
     const list = tasksByOwner.get(owner) || [];
     const byDate = workload.get(owner) || new Map();
     const loadHours = Array.from(byDate.values()).reduce((sum, v) => sum + v.reduce((s, t) => s + (t._hoursPerDay || 0), 0), 0);
-    const ownerCapacity = getOwnerCapacity(board, owner, capacity);
-    const overloadDays = Array.from(byDate.values()).filter(v => v.reduce((s, t) => s + (t._hoursPerDay || 0), 0) > ownerCapacity).length;
+    const overloadDays = Array.from(byDate.entries()).filter(([dateKey, v]) => {
+      const load = v.reduce((s, t) => s + (t._hoursPerDay || 0), 0);
+      return load > getOwnerCapacityForDate(board, owner, dateKey, capacity);
+    }).length;
+    const unavailableDays = dateKeys.filter(dateKey => isOwnerUnavailable(board, owner, dateKey)).length;
     const overdue = list.filter(t => isOverdue(t.due) && t.status !== "Done").length;
     const dueSoon = list.filter(t => isDueSoon(t.due) && t.status !== "Done").length;
-    return { owner, taskCount: list.length, loadHours, overloadDays, overdue, dueSoon };
+    return { owner, taskCount: list.length, loadHours, overloadDays, unavailableDays, overdue, dueSoon };
   });
 
   const maxLoad = Math.max(1, ...Array.from(workload.values()).flatMap(byDate => Array.from(byDate.values()).map(v => v.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0))));
@@ -1931,17 +2012,22 @@ function TeamScheduleView({ board, onOpen }: any) {
                 <div key={owner} style={{ display: "grid", gridTemplateColumns: "220px 1fr", minHeight: Math.max(76, ((tasksByOwner.get(owner) || []).length * 28) + 24), borderBottom: "1px solid #f0f2f8", background: "#fff" }}>
                   <div style={{ padding: "12px", borderRight: "1px solid #f0f2f8", position: "sticky", left: 0, background: "#fff", zIndex: 3 }}>
                     <div style={{ fontSize: 13, fontWeight: 900, color: "#323338", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner}</div>
-                    <div style={{ marginTop: 3, fontSize: 11, color: "#98a1b3" }}>{(tasksByOwner.get(owner) || []).length} scheduled tasks</div>
+                    <div style={{ marginTop: 3, fontSize: 11, color: "#98a1b3" }}>{(tasksByOwner.get(owner) || []).length} scheduled tasks • {getOwnerUnavailableDates(board, owner).length} off day(s)</div>
                   </div>
                   <div style={{ position: "relative", minHeight: Math.max(76, ((tasksByOwner.get(owner) || []).length * 28) + 24), display: "grid", gridTemplateColumns: `repeat(${days}, minmax(46px, 1fr))` }}>
                     {dayList.map(day => {
                       const key = day.toISOString().slice(0, 10);
                       const list = byDate.get(key) || [];
                       const loadHours = list.reduce((sum, t) => sum + (t._hoursPerDay || 0), 0);
-                      const ownerCapacity = getOwnerCapacity(board, owner, capacity);
+                      const unavailable = isOwnerUnavailable(board, owner, key);
+                      const ownerCapacity = getOwnerCapacityForDate(board, owner, key, capacity);
                       const overloaded = loadHours > ownerCapacity;
-                      const intensity = Math.min(loadHours / Math.max(maxLoad, ownerCapacity), 1);
-                      return <div key={key} title={list.length ? `${Math.round(loadHours * 10) / 10}h • ${list.length} task(s)` : ""} style={{ borderLeft: "1px solid #f7f8fc", background: overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.04 + intensity * 0.12})` : "#fff" }}>{overloaded && <div style={{ height: 4, background: "#fdab3d" }} />}</div>;
+                      const intensity = Math.min(loadHours / Math.max(maxLoad, Math.max(ownerCapacity, 1)), 1);
+                      const reason = getOwnerUnavailableReason(board, owner, key);
+                      const title = unavailable
+                        ? `${owner} unavailable${reason ? `: ${reason}` : ""}${list.length ? ` • ${Math.round(loadHours * 10) / 10}h scheduled` : ""}`
+                        : (list.length ? `${Math.round(loadHours * 10) / 10}h / ${ownerCapacity}h • ${list.length} task(s)` : `${ownerCapacity}h available`);
+                      return <div key={key} title={title} style={{ borderLeft: "1px solid #f7f8fc", background: unavailable ? "repeating-linear-gradient(135deg,#f1f3f7 0,#f1f3f7 6px,#e7eaf0 6px,#e7eaf0 12px)" : overloaded ? "#fff2d0" : list.length ? `rgba(0,115,234,${0.04 + intensity * 0.12})` : "#fff", position: "relative" }}>{unavailable ? <div style={{ position: "absolute", inset: "auto 4px 4px 4px", fontSize: 9, color: "#676879", fontWeight: 900, textAlign: "center" }}>OFF</div> : overloaded && <div style={{ height: 4, background: "#fdab3d" }} />}</div>;
                     })}
                     {(tasksByOwner.get(owner) || []).map((task, idx) => {
                       const startIndex = Math.max(0, diffDays(today, task._start));
@@ -2304,10 +2390,113 @@ function patchTaskOnBoard(board,groupId,itemId,patch){
   };
 }
 function taskDailyHours(item){const r=getTaskRange(item);const effort=getEffortHours(item);if(!r)return effort||0;const days=Math.max(1,diffDays(r.start,r.end)+1);return effort>0?effort/days:1;}
-function planningConflicts(boards){const daily=new Map();for(const {board,item} of getBoardTaskRecords(boards)){if(!isOpenPlanningTask(item))continue;const owner=normalizeOwner(item.owner);if(!owner||owner==="No owner")continue;const r=getTaskRange(item);if(!r)continue;const cap=getOwnerCapacity(board,owner,6);const h=taskDailyHours(item);for(let d=new Date(r.start);d<=r.end;d=addDays(d,1)){const date=d.toISOString().slice(0,10);const key=`${board.id}|${owner}|${date}`;const cur=daily.get(key)||{board,owner,date,cap,hours:0,tasks:[]};cur.hours+=h;cur.tasks.push(item.name);daily.set(key,cur);}}return Array.from(daily.values()).filter(x=>x.hours>x.cap).sort((a,b)=>(b.hours-b.cap)-(a.hours-a.cap)).slice(0,10);}
+function planningConflicts(boards){const daily=new Map();for(const {board,item} of getBoardTaskRecords(boards)){if(!isOpenPlanningTask(item))continue;const owner=normalizeOwner(item.owner);if(!owner||owner==="No owner")continue;const r=getTaskRange(item);if(!r)continue;const h=taskDailyHours(item);for(let d=new Date(r.start);d<=r.end;d=addDays(d,1)){const date=d.toISOString().slice(0,10);const cap=getOwnerCapacityForDate(board,owner,date,6);const key=`${board.id}|${owner}|${date}`;const cur=daily.get(key)||{board,owner,date,cap,hours:0,tasks:[]};cur.hours+=h;cur.tasks.push(item.name);daily.set(key,cur);}}return Array.from(daily.values()).filter(x=>x.hours>x.cap).sort((a,b)=>(b.hours-b.cap)-(a.hours-a.cap)).slice(0,10);}
 function ownerLoadScore(board,owner){const cap=getOwnerCapacity(board,owner,6);const items=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)===normalizeOwner(owner));return items.reduce((s,i)=>s+getEffortHours(i),0)/Math.max(cap,1);}
 function autoOwner(board){const owners=getBoardOwners(board).filter(o=>o&&o!=="No owner");return owners.map(owner=>({owner,score:ownerLoadScore(board,owner)})).sort((a,b)=>a.score-b.score)[0]||null;}
 function boardHealth(board){const items=asArray(board.groups).flatMap(g=>asArray(g.items));const total=items.length;const done=items.filter(i=>["Done","Submitted","Approved"].includes(i.status)).length;const overdue=items.filter(i=>isOpenPlanningTask(i)&&isOverdue(i.due)).length;const unassigned=items.filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)==="No owner").length;const risk=items.filter(i=>["At Risk","Invalid","Tight Review"].includes(getPlanningAnalysis(i,getOwnerCapacity(board,i.owner,6)).risk)).length;const score=Math.max(0,Math.min(100,Math.round(100-overdue*12-risk*8-unassigned*5+(total?done/total:1)*20)));return{score,total,done,overdue,unassigned,risk,level:score>=80?"Good":score>=60?"Medium":"Risky"};}
+
+
+function AvailabilityPanel({ boards, onPatchBoard }: any) {
+  const { dark } = useDark();
+  const card = dark ? "#16213e" : "#fff";
+  const text = dark ? "#e0e0f0" : "#323338";
+  const sub = dark ? "#8888aa" : "#676879";
+  const bdr = dark ? "#2a2a4a" : "#eef1f7";
+  const boardList = asArray(boards);
+  const [boardId, setBoardId] = useState(boardList[0]?.id);
+  const board = boardList.find(b => String(b.id) === String(boardId)) || boardList[0];
+  const owners = useMemo(() => getBoardOwners(board), [board]);
+  const [owner, setOwner] = useState("");
+  const todayKey = new Date(new Date().toDateString()).toISOString().slice(0, 10);
+  const [start, setStart] = useState(todayKey);
+  const [end, setEnd] = useState(todayKey);
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    if (board && !boardList.some(b => String(b.id) === String(boardId))) setBoardId(board.id);
+  }, [board, boardId, boardList]);
+
+  useEffect(() => {
+    if (!owner && owners.length > 0) setOwner(owners[0]);
+    if (owner && owners.length > 0 && !owners.includes(owner)) setOwner(owners[0]);
+  }, [owners, owner]);
+
+  if (!board) return null;
+
+  const selectedOwner = owner || owners[0] || "";
+  const upcomingByOwner = owners.map(o => {
+    const dates = getOwnerUnavailableDates(board, o).filter(dateKey => {
+      const d = parseDateOnly(dateKey);
+      return d && d >= new Date(new Date().toDateString());
+    });
+    return { owner: o, dates };
+  });
+
+  function markUnavailable() {
+    if (!selectedOwner || !start) return;
+    onPatchBoard?.(board.id, current => setOwnerAvailabilityRangeOnBoard(current, selectedOwner, start, end || start, true, reason));
+  }
+
+  function clearUnavailable() {
+    if (!selectedOwner || !start) return;
+    onPatchBoard?.(board.id, current => setOwnerAvailabilityRangeOnBoard(current, selectedOwner, start, end || start, false, ""));
+  }
+
+  return (
+    <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 12, padding: 16, boxShadow: "0 2px 8px rgba(0,0,0,.06)", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 900, color: text }}>🏝️ Team Availability Calendar</div>
+          <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Mark leave / unavailable days. Workload capacity becomes 0 on those dates.</div>
+        </div>
+        <select value={String(board.id)} onChange={e => setBoardId(e.target.value)} style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "7px 9px", background: card, color: text, fontSize: 12 }}>
+          {boardList.map(b => <option key={b.id} value={String(b.id)}>{b.name}</option>)}
+        </select>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginTop: 14 }}>
+        <label style={{ display: "grid", gap: 5, fontSize: 11, color: sub, fontWeight: 800 }}>Person
+          <select value={selectedOwner} onChange={e => setOwner(e.target.value)} style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "8px 9px", background: card, color: text, fontSize: 12 }}>
+            {owners.length === 0 ? <option value="">No owner</option> : owners.map(o => <option key={o}>{o}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 11, color: sub, fontWeight: 800 }}>Start
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "8px 9px", background: card, color: text, fontSize: 12 }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 11, color: sub, fontWeight: 800 }}>End
+          <input type="date" value={end} onChange={e => setEnd(e.target.value)} style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "8px 9px", background: card, color: text, fontSize: 12 }} />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 11, color: sub, fontWeight: 800 }}>Reason
+          <input value={reason} onChange={e => setReason(e.target.value)} placeholder="Leave, client visit, training…" style={{ border: `1px solid ${bdr}`, borderRadius: 8, padding: "8px 9px", background: card, color: text, fontSize: 12 }} />
+        </label>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <button onClick={markUnavailable} disabled={!selectedOwner} style={{ border: "none", borderRadius: 8, background: "#e2445c", color: "#fff", padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: selectedOwner ? "pointer" : "not-allowed", opacity: selectedOwner ? 1 : .55 }}>Mark unavailable</button>
+        <button onClick={clearUnavailable} disabled={!selectedOwner} style={{ border: `1px solid ${bdr}`, borderRadius: 8, background: card, color: text, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: selectedOwner ? "pointer" : "not-allowed", opacity: selectedOwner ? 1 : .55 }}>Clear range</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10, marginTop: 14 }}>
+        {upcomingByOwner.length === 0 ? (
+          <div style={{ color: sub, fontSize: 12 }}>Assign owners first, then availability settings will appear here.</div>
+        ) : upcomingByOwner.map(row => (
+          <div key={row.owner} style={{ border: `1px solid ${bdr}`, borderRadius: 10, padding: "10px 12px", background: dark ? "#111827" : "#fafbff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 900, color: text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.owner}</div>
+              <span style={{ background: row.dates.length ? "#676879" : "#00c875", color: "#fff", borderRadius: 999, padding: "1px 7px", fontSize: 10, fontWeight: 900 }}>{row.dates.length} off</span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+              {row.dates.slice(0, 6).map(dateKey => <span key={dateKey} title={getOwnerUnavailableReason(board, row.owner, dateKey)} style={{ border: `1px solid ${bdr}`, borderRadius: 999, padding: "2px 7px", fontSize: 10, color: sub }}>{dateKey}</span>)}
+              {row.dates.length === 0 && <span style={{ fontSize: 11, color: sub }}>No upcoming unavailable days.</span>}
+              {row.dates.length > 6 && <span style={{ fontSize: 10, color: sub }}>+{row.dates.length - 6} more</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function DashboardReviewPanel({ boards }: any) {
   const { dark } = useDark();
@@ -2458,6 +2647,7 @@ function Dashboard({ boards, onPatchBoard }: any) {
           {[
             ["overview", "Overview"],
             ["planning", "Planning"],
+            ["availability", "Availability"],
             ["reviews", "Comments & Approval"],
           ].map(([key, label]) => (
             <button key={key} onClick={() => setDashTab(key)} style={{ border: "none", borderRadius: 999, padding: "6px 12px", background: dashTab === key ? "#0073ea" : "transparent", color: dashTab === key ? "#fff" : sub, fontSize: 12, fontWeight: 900, cursor: "pointer" }}>{label}</button>
@@ -2466,6 +2656,7 @@ function Dashboard({ boards, onPatchBoard }: any) {
       </div>
 
       {dashTab === "planning" && <><PlanningSuitePanel boards={boards} onPatchBoard={onPatchBoard} /><GanttWhatIfPanel boards={boards} /></>}
+      {dashTab === "availability" && <AvailabilityPanel boards={boards} onPatchBoard={onPatchBoard} />}
       {dashTab === "reviews" && <DashboardReviewPanel boards={boards} />}
 
       {dashTab === "overview" && <>
