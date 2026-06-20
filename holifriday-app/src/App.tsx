@@ -1689,9 +1689,9 @@ function TaskPanel({ item, onUpdate, onClose, currentUserName, canEditTask, canE
   );
 }
 
-// ─── Kanban Card ──────────────────────────────────────────────────────────────
+// ─── Board Card ──────────────────────────────────────────────────────────────
 
-function KanbanCard({ item, onUpdate, onOpen }: any) {
+function BoardCard({ item, onUpdate, onOpen }: any) {
   const overdue = isOverdue(item.due) && item.status !== "Done";
   const soon    = isDueSoon(item.due) && item.status !== "Done" && !overdue;
   const stat    = STATUS_OPTIONS.find(s => s.label === item.status);
@@ -1715,49 +1715,6 @@ function KanbanCard({ item, onUpdate, onOpen }: any) {
   );
 }
 
-function KanbanView({ board, onUpdate, onCelebrate, currentUserName, currentUserEmail }) {
-  function updItem(groupId, updated) {
-    if (updated.status === "Done") {
-      const old = board.groups.flatMap(g => g.items).find(i => i.id === updated.id);
-      if (old?.status !== "Done") onCelebrate(updated.name, window.innerWidth / 2);
-    }
-    onUpdate({ ...board, groups: board.groups.map(g => g.id === groupId ? { ...g, items: g.items.map(i => i.id === updated.id ? updated : i) } : g) });
-  }
-
-  const [panelItem, setPanelItem] = useState(null);
-  const panelGroup = board.groups.find(g => g.items.some(i => i.id === panelItem?.id));
-  const normalizedUserEmail = normalizeEmail(currentUserEmail);
-  const panelRole = panelGroup ? normalizeRole(panelGroup.memberRoles?.[memberRoleKey(normalizedUserEmail)] || "editor") : "editor";
-  const panelCanEditTask = !normalizedUserEmail || panelRole === "editor";
-  const panelCanEditStatus = panelCanEditTask;
-  const panelCanComment = panelCanEditTask;
-
-  return (
-    <div style={{ flex: 1, overflowX: "auto", padding: "24px 28px", display: "flex", gap: 16, alignItems: "flex-start" }}>
-      {panelItem && panelGroup && (
-        <TaskPanel item={panelItem} onUpdate={u => { updItem(panelGroup.id, u); setPanelItem(u); }} onClose={() => setPanelItem(null)} currentUserName={currentUserName} canEditTask={panelCanEditTask} canEditStatus={panelCanEditStatus} canComment={panelCanComment} />
-      )}
-      {STATUS_OPTIONS.map(col => {
-        const allItems = board.groups.flatMap(g => g.items.filter(i => i.status === col.label).map(i => ({ ...i, _gid: g.id })));
-        return (
-          <div key={col.label} style={{ minWidth: 240, maxWidth: 280, flex: "0 0 260px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: col.color }} />
-              <span style={{ fontWeight: 700, fontSize: 13, color: "#323338" }}>{col.label}</span>
-              <span style={{ fontSize: 11, color: "#aaa", marginLeft: "auto", background: "#f0f0f0", borderRadius: 10, padding: "1px 7px" }}>{allItems.length}</span>
-            </div>
-            <div style={{ background: "#f6f7fb", borderRadius: 10, padding: "8px", minHeight: 120 }}>
-              {allItems.map(item => (
-                <KanbanCard key={item.id} item={item} onUpdate={u => updItem(item._gid, u)} onOpen={setPanelItem} />
-              ))}
-              {allItems.length === 0 && <div style={{ textAlign: "center", color: "#ddd", fontSize: 12, paddingTop: 20 }}>No tasks</div>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function CalendarTimelineView({ board, onOpen }) {
   const scheduledItems = useMemo(() => {
@@ -2898,7 +2855,7 @@ function AdvancedPMPanel({ boards, onPatchBoard, onSetBoards }: any) {
       <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 12, padding: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 900, color: text }}>🧠 Advanced PM Control Center</div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: text }}>🧠 Planning Control Center</div>
             <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Automation builder, real dependencies, editable timeline, and chart reports.</div>
           </div>
           <select value={String(board.id)} onChange={e => setBoardId(e.target.value)} style={inputStyle}>
@@ -2998,7 +2955,7 @@ function AdvancedPMPanel({ boards, onPatchBoard, onSetBoards }: any) {
 }
 
 
-function GovernancePanel({ boards, onPatchBoard }: any) {
+function SettingsPanel({ boards, onPatchBoard }: any) {
   const { dark } = useDark();
   const card = dark ? "#16213e" : "#fff";
   const bg = dark ? "#101827" : "#fafbff";
@@ -3206,7 +3163,7 @@ function GovernancePanel({ boards, onPatchBoard }: any) {
       <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 12, padding: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 900, color: text }}>🛡️ Governance Center</div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: text }}>🛡️ Settings Center</div>
             <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Baseline / version control and board-level role management.</div>
           </div>
           <select value={String(board.id)} onChange={e => setBoardId(e.target.value)} style={inputStyle}>
@@ -3407,7 +3364,7 @@ function PMSuitePanel({ boards, onPatchBoard, onSetBoards }: any) {
       window.alert("You need at least one active board. Create or restore another board before archiving this one.");
       return;
     }
-    if (!window.confirm(`Archive board "${board.name}"? You can restore it later from this PM Suite tab.`)) return;
+    if (!window.confirm(`Archive board "${board.name}"? You can restore it later from this Tools tab.`)) return;
     updateBoards(bs => bs.map(b => b.id === board.id ? { ...b, archivedAt: new Date().toISOString() } : b));
   }
 
@@ -3569,7 +3526,7 @@ function PMSuitePanel({ boards, onPatchBoard, onSetBoards }: any) {
       if (item.due) events.push(icsEvent(`${item.name} due`, item.due, `${board.name} / ${item.status}`));
       if (item.pmReviewDate) events.push(icsEvent(`${item.name} PM Review`, item.pmReviewDate, `${board.name} / PM review`));
     }
-    const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//HOLIFRIDAY//PM Suite//EN", ...events, "END:VCALENDAR"].join("\r\n");
+    const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//HOLIFRIDAY//Tools//EN", ...events, "END:VCALENDAR"].join("\r\n");
     downloadText("holifriday-calendar.ics", ics, "text/calendar;charset=utf-8");
   }
 
@@ -3634,7 +3591,7 @@ function icsEscape(value) { return String(value ?? "").replace(/\\/g, "\\\\").re
 function icsEvent(summary, dateKey, description = "") { const uidText = `${Date.now()}-${Math.random().toString(36).slice(2)}@holifriday`; return ["BEGIN:VEVENT", `UID:${uidText}`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`, `DTSTART;VALUE=DATE:${icsDate(dateKey)}`, `SUMMARY:${icsEscape(summary)}`, `DESCRIPTION:${icsEscape(description)}`, "END:VEVENT"].join("\r\n"); }
 function downloadText(filename, content, mime = "text/plain;charset=utf-8") { const blob = new Blob([content], { type: mime }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
-function Dashboard({ boards, onPatchBoard, onSetBoards }: any) {
+function Dashboard({ boards, onPatchBoard, onSetBoards, simpleMode = true }: any) {
   const { dark } = useDark();
   const bg   = dark ? "#1a1a2e" : "#f7f8fc";
   const card = dark ? "#16213e" : "#fff";
@@ -3669,11 +3626,11 @@ function Dashboard({ boards, onPatchBoard, onSetBoards }: any) {
           {[
             ["overview", "Overview"],
             ["planning", "Planning"],
-            ["availability", "Availability"],
-            ["pmSuite", "PM Suite"],
-            ["advanced", "Advanced PM"],
-            ["governance", "Governance"],
-            ["reviews", "Comments & Approval"],
+            ["availability", "Team Calendar"],
+            ["pmSuite", "Tools"],
+            ["advanced", "Planning"],
+            ["governance", "Settings"],
+            ["reviews", "Review"],
           ].map(([key, label]) => (
             <button key={key} onClick={() => setDashTab(key)} style={{ border: "none", borderRadius: 999, padding: "6px 12px", background: dashTab === key ? "#0073ea" : "transparent", color: dashTab === key ? "#fff" : sub, fontSize: 12, fontWeight: 900, cursor: "pointer" }}>{label}</button>
           ))}
@@ -3684,7 +3641,7 @@ function Dashboard({ boards, onPatchBoard, onSetBoards }: any) {
       {dashTab === "availability" && <AvailabilityPanel boards={boards} onPatchBoard={onPatchBoard} />}
       {dashTab === "pmSuite" && <PMSuitePanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} />}
       {dashTab === "advanced" && <AdvancedPMPanel boards={boards} onPatchBoard={onPatchBoard} onSetBoards={onSetBoards} />}
-      {dashTab === "governance" && <GovernancePanel boards={boards} onPatchBoard={onPatchBoard} />}
+      {dashTab === "governance" && <SettingsPanel boards={boards} onPatchBoard={onPatchBoard} />}
       {dashTab === "reviews" && <DashboardReviewPanel boards={boards} />}
 
       {dashTab === "overview" && <>
@@ -4569,7 +4526,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
         </div>
         {/* View toggle */}
         <div style={{ display: "flex", gap: 4, marginLeft: "auto", background: "#f6f7fb", borderRadius: 8, padding: 3 }}>
-          {[["table","☰ Table"],["kanban","⬡ Kanban"],["calendar","🗓 Calendar"],["mywork","👤 My Work"],["workload","👥 Workload"],["critical","🧭 Critical"],["planning","🧠 Planning"]].map(([v,label]) => (
+          {[["table","☰ Table"],["kanban","⬡ Board"],["calendar","🗓 Calendar"],["mywork","👤 My Work"],["workload","👥 Workload"],["critical","🧭 Critical"],["planning","🧠 Planning"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{ background: view === v ? "#fff" : "none", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: view === v ? "#0073ea" : "#676879", cursor: "pointer", boxShadow: view === v ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{label}</button>
           ))}
         </div>
@@ -4582,7 +4539,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
 
       {/* Keyboard shortcut hint */}
       <div style={{ background: "#f7f8fc", borderBottom: "1px solid #f0f0f0", padding: "4px 28px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Kanban"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
+        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Board"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
           <span key={key} style={{ fontSize: 11, color: "#98a1b3", display: "flex", alignItems: "center", gap: 4 }}>
             <kbd style={{ background: "#fff", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", color: "#323338", boxShadow: "0 1px 2px rgba(0,0,0,.06)" }}>{key}</kbd>
             {label}
@@ -4638,7 +4595,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
 
       {/* Content */}
       {view === "kanban" ? (
-        <KanbanView board={filteredBoard} onUpdate={updatedVisibleBoard => mergeFilteredBoardUpdate(filteredBoard, updatedVisibleBoard)} onCelebrate={onCelebrate} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
+        <BoardView board={filteredBoard} onUpdate={updatedVisibleBoard => mergeFilteredBoardUpdate(filteredBoard, updatedVisibleBoard)} onCelebrate={onCelebrate} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
       ) : view === "calendar" ? (
         <CalendarTimelineView board={filteredBoard} onOpen={handleOpenItem} />
       ) : view === "mywork" ? (
@@ -4825,6 +4782,147 @@ function GlobalSearch({ boards, onNavigate, onClose }: { boards: any[]; onNaviga
   );
 }
 
+
+function HomeTodayPage({ boards, activeBoard, currentUserEmail, onOpenBoard, onOpenReport, onCreateBoard, onQuickAddTask }: any) {
+  const { dark } = useDark();
+  const bg = dark ? "#0f0f1e" : "#f7f8fc";
+  const card = dark ? "#16213e" : "#fff";
+  const text = dark ? "#e0e0f0" : "#323338";
+  const sub = dark ? "#8888aa" : "#676879";
+  const bdr = dark ? "#2a2a4a" : "#eef1f7";
+
+  const activeBoards = asArray(boards).filter((b: any) => !b.archivedAt);
+  const taskRows = getBoardTaskRecords(activeBoards);
+  const today = new Date(new Date().toDateString());
+  const me = normalizeEmail(currentUserEmail);
+
+  const overdue = taskRows.filter(r => isOpenPlanningTask(r.item) && isOverdue(r.item.due));
+  const dueToday = taskRows.filter(r => {
+    const due = parseDateOnly(r.item.due);
+    return isOpenPlanningTask(r.item) && !!due && diffDays(today, due) === 0;
+  });
+  const reviewQueue = taskRows.filter(r => ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(r.item.status));
+  const myTasks = taskRows.filter(r => me && normalizeEmail(r.item.owner) === me && isOpenPlanningTask(r.item));
+  const offConflicts = taskRows.filter(r => {
+    const range = getTaskRange(r.item);
+    const owner = normalizeOwner(r.item.owner);
+    if (!range || owner === "No owner") return false;
+    for (let d = new Date(range.start); d <= range.end; d = addDays(d, 1)) {
+      if (isOwnerUnavailable(r.board, owner, d.toISOString().slice(0, 10))) return true;
+    }
+    return false;
+  });
+
+  const nextItems = [...overdue, ...dueToday, ...reviewQueue, ...offConflicts]
+    .filter((row, idx, arr) => arr.findIndex(x => x.item.id === row.item.id) === idx)
+    .slice(0, 8);
+
+  function StatCard({ title, value, hint, color, icon }: any) {
+    return (
+      <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16, boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>{icon}</span>
+          <span style={{ fontSize: 12, color: sub, fontWeight: 800 }}>{title}</span>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 30, fontWeight: 900, color }}>{value}</div>
+        <div style={{ marginTop: 3, fontSize: 11, color: sub }}>{hint}</div>
+      </div>
+    );
+  }
+
+  function ActionButton({ children, onClick, primary = false }: any) {
+    return (
+      <button onClick={onClick} style={{ border: primary ? "none" : `1px solid ${bdr}`, background: primary ? "#0073ea" : card, color: primary ? "#fff" : text, borderRadius: 10, padding: "9px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>
+        {children}
+      </button>
+    );
+  }
+
+  const noWorkYet = taskRows.length === 0;
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", background: bg, padding: 24 }}>
+      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 950, color: text, letterSpacing: -0.7 }}>Home</div>
+            <div style={{ marginTop: 4, fontSize: 13, color: sub }}>Start here. These are the things that need attention today.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <ActionButton primary onClick={onQuickAddTask}>+ New Task</ActionButton>
+            <ActionButton onClick={onCreateBoard}>+ New Board</ActionButton>
+            <ActionButton onClick={onOpenBoard}>Open Board</ActionButton>
+            <ActionButton onClick={onOpenReport}>Open Report</ActionButton>
+          </div>
+        </div>
+
+        {noWorkYet ? (
+          <div style={{ background: card, border: `1px dashed ${bdr}`, borderRadius: 16, padding: 28, textAlign: "center", boxShadow: "0 2px 8px rgba(0,0,0,.04)" }}>
+            <div style={{ fontSize: 34 }}>🌱</div>
+            <div style={{ marginTop: 8, fontSize: 18, fontWeight: 900, color: text }}>No tasks yet</div>
+            <div style={{ marginTop: 6, fontSize: 13, color: sub }}>Create your first task or start from a board template.</div>
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+              <ActionButton primary onClick={onQuickAddTask}>+ Create first task</ActionButton>
+              <ActionButton onClick={onCreateBoard}>+ Create board</ActionButton>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
+              <StatCard icon="⚠️" title="Overdue" value={overdue.length} hint="Tasks past due date" color="#e2445c" />
+              <StatCard icon="📍" title="Due today" value={dueToday.length} hint="Tasks due today" color="#fdab3d" />
+              <StatCard icon="✅" title="PM review" value={reviewQueue.length} hint="Waiting for review" color="#579bfc" />
+              <StatCard icon="🏝️" title="OFF conflict" value={offConflicts.length} hint="Scheduled on unavailable days" color="#a25ddc" />
+              <StatCard icon="👤" title="My tasks" value={myTasks.length} hint="Assigned to you" color="#00c875" />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,1.3fr) minmax(280px,.8fr)", gap: 16 }}>
+              <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16, boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+                <div style={{ fontSize: 15, fontWeight: 900, color: text }}>Things to check</div>
+                <div style={{ fontSize: 12, color: sub, marginTop: 3 }}>Focus on these first.</div>
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  {nextItems.length === 0 ? (
+                    <div style={{ padding: 18, borderRadius: 12, background: dark ? "#101827" : "#f3fff8", color: "#00a35a", fontSize: 13, fontWeight: 800 }}>All clear. No urgent items right now.</div>
+                  ) : nextItems.map(({ board, group, item }) => {
+                    const isLate = isOpenPlanningTask(item) && isOverdue(item.due);
+                    const isReview = ["Ready for PM Review", "PM Reviewing", "Need Revision"].includes(item.status);
+                    return (
+                      <button key={`${board.id}-${group.id}-${item.id}`} onClick={() => onOpenBoard(board.id)} style={{ textAlign: "left", border: `1px solid ${bdr}`, borderLeft: `4px solid ${isLate ? "#e2445c" : isReview ? "#579bfc" : "#fdab3d"}`, borderRadius: 10, background: dark ? "#101827" : "#fff", padding: "10px 12px", cursor: "pointer" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                          <div style={{ fontSize: 13, fontWeight: 900, color: text, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                          <span style={{ fontSize: 10, fontWeight: 900, color: isLate ? "#e2445c" : "#0073ea", whiteSpace: "nowrap" }}>{item.status}</span>
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 11, color: sub }}>{board.name} / {group.name} • {item.owner || "No owner"} • due {item.due || "—"}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 14, padding: 16, boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
+                <div style={{ fontSize: 15, fontWeight: 900, color: text }}>Simple workflow</div>
+                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                  {[
+                    ["1", "Create task", "Add the work item and owner."],
+                    ["2", "Set dates", "Add start, due, and PM review date."],
+                    ["3", "Update status", "Move work through the board."],
+                    ["4", "Review report", "Check Report when you need a summary."],
+                  ].map(([n, title, hint]) => (
+                    <div key={n} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      <div style={{ width: 24, height: 24, borderRadius: 999, background: "#eef4ff", color: "#0073ea", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900 }}>{n}</div>
+                      <div><div style={{ fontSize: 12, fontWeight: 900, color: text }}>{title}</div><div style={{ fontSize: 11, color: sub, marginTop: 2 }}>{hint}</div></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onDelete, onChangeView }) {
@@ -4857,7 +4955,7 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onDelete, onCh
 
       {/* Nav */}
       <div style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
-        {[["dashboard","📊","Dashboard"],["boards","📋","Boards"]].map(([v,icon,label]) => (
+        {[["home","🏠","Home"],["boards","📋","Board"],["dashboard","📊","Report"]].map(([v,icon,label]) => (
           <button key={v} onClick={() => onChangeView(v)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: open ? "8px 14px" : "8px 0", justifyContent: open ? "flex-start" : "center", background: activeView === v ? "rgba(255,255,255,.12)" : "none", border: "none", cursor: "pointer", color: activeView === v ? "#fff" : "rgba(255,255,255,.45)", fontSize: 13, transition: "background .15s" }}
             onMouseEnter={e => { if (activeView !== v) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
             onMouseLeave={e => { if (activeView !== v) e.currentTarget.style.background = "none"; }}
@@ -5025,7 +5123,7 @@ function AppContent() {
   const [workspaceId] = useState(() => getWorkspaceIdFromLocation());
   const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid, workspaceId);
   const [activeId, setActiveId] = useState(INITIAL_BOARDS[0].id);
-  const [activeView, setActiveView] = useState("boards"); // boards | dashboard
+  const [activeView, setActiveView] = useState("home"); // home | boards | dashboard
   const [inviteToken, setInviteToken] = useState(() => {
     try {
       return new URLSearchParams(window.location.search).get("invite") || "";
@@ -5038,6 +5136,7 @@ function AppContent() {
   const assignReadyRef = useRef(false);
   const { cel, celebrate } = useCelebration();
   const [dark, setDark] = useLocalStorage("holifriday_dark", false);
+  const [simpleMode, setSimpleMode] = useLocalStorage("holifriday_simple_mode", true);
   const [dueBanner, setDueBanner] = useState<string[]>([]);
   const [mergeConflict, setMergeConflict] = useState<any | null>(null);
   const boardsRef = useRef<any[]>(boards);
@@ -5484,6 +5583,23 @@ function AppContent() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${dark ? "#2a2a4a" : "#eceef5"}`, background: dark ? "#16213e" : "#fafbff" }}>
           <div style={{ fontSize: 12, color: dark ? "#8888aa" : "#676879" }}>Signed in as: <strong style={{ color: dark ? "#e0e0f0" : "#323338" }}>{authUser.displayName || authUser.email}</strong> ({authUser.email})</div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setSimpleMode((v: boolean) => !v)} title="Switch between simple and advanced mode" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              {simpleMode ? "Simple mode" : "Advanced mode"}
+            </button>
+            <button onClick={() => {
+              const name = window.prompt("Task name");
+              if (!name?.trim()) return;
+              const b = activeBoard;
+              const g = asArray(b?.groups)[0];
+              if (!b || !g) { window.alert("Create a board first."); return; }
+              const newTask = { id: uid(), name: name.trim(), owner: "No owner", status: "Not Started", priority: "Medium", start: "", due: "", tags: [], comments: [], subtasks: [], approvalHistory: [] };
+              patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
+              setActiveId(b.id); setActiveView("boards");
+            }} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Task</button>
+            <button onClick={() => {
+              const name = window.prompt("Board name");
+              if (name?.trim()) addBoard(name.trim());
+            }} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Board</button>
             <button onClick={() => setGlobalSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, background: dark ? "#1a1a2e" : "#f5f6fb", color: dark ? "#aaa" : "#676879", borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
               <span>🔍</span><span>Search all boards</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
@@ -5523,9 +5639,28 @@ function AppContent() {
             <div style={{ fontSize: 12, color: "#1f5ecf", fontWeight: 700 }}>⏳ Joining group, please wait...</div>
           </div>
         )}
-        {activeView === "dashboard"
-          ? <Dashboard boards={boards} onPatchBoard={patchBoardById} onSetBoards={setBoards} />
-          : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onPatchBoard={patchBoardById} onCelebrate={celebrate} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} jumpItemId={jumpItemId} onJumpHandled={() => setJumpItemId(null)} />
+        {activeView === "home"
+          ? <HomeTodayPage
+              boards={boards}
+              activeBoard={activeBoard}
+              currentUserEmail={authUser.email}
+              onOpenBoard={(boardId?: any) => { if (boardId) setActiveId(boardId); setActiveView("boards"); }}
+              onOpenReport={() => setActiveView("dashboard")}
+              onCreateBoard={() => { const name = window.prompt("Board name"); if (name?.trim()) addBoard(name.trim()); }}
+              onQuickAddTask={() => {
+                const name = window.prompt("Task name");
+                if (!name?.trim()) return;
+                const b = activeBoard;
+                const g = asArray(b?.groups)[0];
+                if (!b || !g) { window.alert("Create a board first."); return; }
+                const newTask = { id: uid(), name: name.trim(), owner: "No owner", status: "Not Started", priority: "Medium", start: "", due: "", tags: [], comments: [], subtasks: [], approvalHistory: [] };
+                patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
+                setActiveId(b.id); setActiveView("boards");
+              }}
+            />
+          : activeView === "dashboard"
+            ? <Dashboard boards={boards} onPatchBoard={patchBoardById} onSetBoards={setBoards} simpleMode={simpleMode} />
+            : activeBoard && <BoardView board={activeBoard} onUpdate={updateBoard} onPatchBoard={patchBoardById} onCelebrate={celebrate} currentUserName={authUser.displayName || authUser.email} currentUserEmail={authUser.email} jumpItemId={jumpItemId} onJumpHandled={() => setJumpItemId(null)} />
         }
       </div>
     </div>
