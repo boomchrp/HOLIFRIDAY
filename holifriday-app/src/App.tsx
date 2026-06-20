@@ -5921,7 +5921,7 @@ function AppContent() {
   const [workspaceId] = useState(() => getWorkspaceIdFromLocation());
   const [boards, setBoards, boardsReady, boardsFirebaseLoaded, boardsLoadedUid, boardsLoadError] = useSyncedBoards("holifriday_boards", INITIAL_BOARDS, authUser?.uid, workspaceId);
   const [activeId, setActiveId] = useState(INITIAL_BOARDS[0].id);
-  const [activeView, setActiveView] = useState("home"); // home | boards | dashboard
+  const [activeView, setActiveView] = useState("home"); // home | templates | mywork | boards | dashboard | reviewInbox | alerts | client
   const [inviteToken, setInviteToken] = useState(() => {
     try {
       return new URLSearchParams(window.location.search).get("invite") || "";
@@ -6147,8 +6147,27 @@ function AppContent() {
     }
 
     const taskCount = asArray(target.groups).reduce((sum, g) => sum + asArray(g.items).length, 0);
-    const ok = window.confirm(`Delete board "${target.name}"?\n\nThis will permanently remove ${asArray(target.groups).length} group(s) and ${taskCount} task(s) from this shared workspace.\n\nTip: export a backup first if you may need it later.`);
-    if (!ok) return;
+
+    if (!target.archivedAt) {
+      const okArchive = window.confirm(`Archive board "${target.name}"?\n\nThis keeps ${asArray(target.groups).length} group(s) and ${taskCount} task(s), and you can restore it later.`);
+      if (!okArchive) return;
+
+      const archivedAt = new Date().toISOString();
+      const nextBoards = asArray(boards).map(b => b.id === boardId ? { ...b, archivedAt } : b);
+      setBoards(nextBoards);
+
+      const nextActiveBoards = nextBoards.filter(b => !b.archivedAt);
+      if (activeId === boardId) {
+        setActiveId(nextActiveBoards[0]?.id || nextBoards[0]?.id || INITIAL_BOARDS[0].id);
+        setActiveView(nextActiveBoards.length > 0 ? "boards" : "dashboard");
+      }
+
+      window.alert("Archived first instead of permanently deleting. Restore it from archived boards if needed.");
+      return;
+    }
+
+    const okDelete = window.confirm(`Permanently delete archived board "${target.name}"?\n\nThis will remove ${asArray(target.groups).length} group(s) and ${taskCount} task(s) from this shared workspace.`);
+    if (!okDelete) return;
 
     const nextBoards = asArray(boards).filter(b => b.id !== boardId);
     setBoards(nextBoards);
