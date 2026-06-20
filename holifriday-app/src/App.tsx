@@ -3799,7 +3799,7 @@ function GlobalSearch({ boards, onNavigate, onClose }: { boards: any[]; onNaviga
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }) {
+function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onDelete, onChangeView }) {
   const [open, setOpen] = useState(true);
   const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState(false);
@@ -3841,15 +3841,32 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onChangeView }
 
       <div style={{ flex: 1, overflowY: "auto", paddingTop: 8 }}>
         {open && <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.25)", letterSpacing: 1.2, padding: "4px 14px 6px", textTransform: "uppercase" }}>Boards</div>}
-        {boards.map(b => (
-          <button key={b.id} onClick={() => { onSelect(b.id); onChangeView("boards"); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: open ? "9px 14px" : "9px 0", justifyContent: open ? "flex-start" : "center", background: activeId === b.id && activeView === "boards" ? "rgba(255,255,255,.12)" : "none", border: "none", cursor: "pointer", transition: "background .15s" }}
-            onMouseEnter={e => { if (!(activeId === b.id && activeView === "boards")) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
-            onMouseLeave={e => { if (!(activeId === b.id && activeView === "boards")) e.currentTarget.style.background = "none"; }}
-          >
-            <div style={{ width: 10, height: 10, borderRadius: 3, background: b.color, flexShrink: 0 }} />
-            {open && <span style={{ fontSize: 13, color: activeId === b.id && activeView === "boards" ? "#fff" : "rgba(255,255,255,.55)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.name}</span>}
-          </button>
-        ))}
+        {boards.map(b => {
+          const active = activeId === b.id && activeView === "boards";
+          return (
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 4, paddingRight: open ? 8 : 0 }}>
+              <button onClick={() => { onSelect(b.id); onChangeView("boards"); }} style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, padding: open ? "9px 6px 9px 14px" : "9px 0", justifyContent: open ? "flex-start" : "center", background: active ? "rgba(255,255,255,.12)" : "none", border: "none", cursor: "pointer", transition: "background .15s", borderRadius: open ? "0 8px 8px 0" : 0 }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.background = "none"; }}
+              >
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: b.color, flexShrink: 0 }} />
+                {open && <span style={{ fontSize: 13, color: active ? "#fff" : "rgba(255,255,255,.55)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.name}</span>}
+              </button>
+              {open && boards.length > 1 && (
+                <button
+                  title={`Delete board: ${b.name}`}
+                  aria-label={`Delete board ${b.name}`}
+                  onClick={e => { e.preventDefault(); e.stopPropagation(); onDelete?.(b.id); }}
+                  style={{ width: 26, height: 26, borderRadius: 7, border: "1px solid rgba(255,255,255,.10)", background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.35)", cursor: "pointer", fontSize: 15, lineHeight: 1, flexShrink: 0 }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(226,68,92,.22)"; e.currentTarget.style.color = "#fff"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,.04)"; e.currentTarget.style.color = "rgba(255,255,255,.35)"; }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          );
+        })}
         {open && (adding ? (
           <div style={{ padding: "6px 10px", display: "flex", gap: 6 }}>
             <input ref={inputRef} value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") setAdding(false); }} placeholder="Board name…" style={{ flex: 1, background: "rgba(255,255,255,.08)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, padding: "5px 8px", color: "#fff", fontSize: 12, outline: "none" }} />
@@ -4158,6 +4175,28 @@ function AppContent() {
     setActiveView("boards");
   };
 
+  const deleteBoard = boardId => {
+    const target = asArray(boards).find(b => b.id === boardId);
+    if (!target) return;
+
+    if (asArray(boards).length <= 1) {
+      window.alert("You need at least one board. Create another board before deleting this one.");
+      return;
+    }
+
+    const taskCount = asArray(target.groups).reduce((sum, g) => sum + asArray(g.items).length, 0);
+    const ok = window.confirm(`Delete board "${target.name}"?\n\nThis will permanently remove ${asArray(target.groups).length} group(s) and ${taskCount} task(s) from this shared workspace.\n\nTip: export a backup first if you may need it later.`);
+    if (!ok) return;
+
+    const nextBoards = asArray(boards).filter(b => b.id !== boardId);
+    setBoards(nextBoards);
+
+    if (activeId === boardId) {
+      setActiveId(nextBoards[0]?.id || INITIAL_BOARDS[0].id);
+      setActiveView(nextBoards.length > 0 ? "boards" : "dashboard");
+    }
+  };
+
   useEffect(() => {
     if (!firebaseAuth) return;
     // Safety timeout: if Firebase auth doesn't respond in 6s, proceed
@@ -4411,7 +4450,7 @@ function AppContent() {
       <Toast show={!!cel} taskName={cel?.taskName} />
       <AssignmentMailNotice notice={assignBanner} onClose={() => setAssignBanner(null)} />
       {globalSearchOpen && <GlobalSearch boards={boards} onNavigate={handleGlobalNavigate} onClose={() => setGlobalSearchOpen(false)} />}
-      <Sidebar boards={boards} activeId={activeId} activeView={activeView} onSelect={setActiveId} onAdd={addBoard} onChangeView={setActiveView} />
+      <Sidebar boards={boards} activeId={activeId} activeView={activeView} onSelect={setActiveId} onAdd={addBoard} onDelete={deleteBoard} onChangeView={setActiveView} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px", borderBottom: `1px solid ${dark ? "#2a2a4a" : "#eceef5"}`, background: dark ? "#16213e" : "#fafbff" }}>
           <div style={{ fontSize: 12, color: dark ? "#8888aa" : "#676879" }}>Signed in as: <strong style={{ color: dark ? "#e0e0f0" : "#323338" }}>{authUser.displayName || authUser.email}</strong> ({authUser.email})</div>
