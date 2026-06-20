@@ -860,7 +860,7 @@ function getRevisionBufferDays(task) {
   return Math.max(0, numberOrDefault(task?.revisionBufferDays, 1));
 }
 
-function getRequiredWorkDays(task, capacityHoursPerDay = 6) {
+function getRequiredWorkDays(task, capacityHoursPerDay = 8) {
   const effort = getEffortHours(task);
   if (effort <= 0) return 0;
   const cap = Math.max(1, Number(capacityHoursPerDay) || 6);
@@ -890,7 +890,7 @@ function getBoardResourceCapacity(board) {
     : {};
 }
 
-function getOwnerCapacity(board, owner, fallback = 6) {
+function getOwnerCapacity(board, owner, fallback = 8) {
   const capMap = getBoardResourceCapacity(board);
   const entry = capMap[capacityKey(owner)];
   const raw = entry && typeof entry === "object" ? entry.hoursPerDay : entry;
@@ -936,7 +936,7 @@ function isOwnerUnavailable(board, owner, dateKey) {
   return getOwnerUnavailableDates(board, owner).includes(asText(dateKey));
 }
 
-function getOwnerCapacityForDate(board, owner, dateKey, fallback = 6) {
+function getOwnerCapacityForDate(board, owner, dateKey, fallback = 8) {
   return isOwnerUnavailable(board, owner, dateKey) ? 0 : getOwnerCapacity(board, owner, fallback);
 }
 
@@ -981,7 +981,7 @@ function setOwnerAvailabilityRangeOnBoard(board, owner, startDate, endDate, unav
       [key]: {
         ...currentEntry,
         owner: ownerName,
-        hoursPerDay: getOwnerCapacity(board, ownerName, 6),
+        hoursPerDay: getOwnerCapacity(board, ownerName, 8),
         unavailableDates: Array.from(currentDates).sort(),
         unavailableReasons: currentReasons,
         updatedAt: new Date().toISOString(),
@@ -991,7 +991,7 @@ function setOwnerAvailabilityRangeOnBoard(board, owner, startDate, endDate, unav
 }
 
 
-function getPlanningAnalysis(task, capacityHoursPerDay = 6) {
+function getPlanningAnalysis(task, capacityHoursPerDay = 8) {
   const today = new Date(new Date().toDateString());
   const finalDeadline = parseDateOnly(task?.due);
   const pmReviewDateManual = parseDateOnly(task?.pmReviewDate);
@@ -1856,7 +1856,7 @@ function CalendarTimelineView({ board, onOpen }) {
 
 function TeamScheduleView({ board, onOpen }: any) {
   const [days, setDays] = useState(30);
-  const [capacity, setCapacity] = useState(6);
+  const [capacity, setCapacity] = useState(8);
   const [hideDone, setHideDone] = useState(true);
   const [selectedOwner, setSelectedOwner] = useState("All");
 
@@ -2074,7 +2074,7 @@ function MyWorkView({ board, currentUserEmail, currentUserName, onOpen }: any) {
     .flatMap(group => asArray(group.items).map(item => ({ ...item, _groupName: group.name, _groupColor: group.color })))
     .filter(item => isMine(item.owner))
     .filter(item => !["Done", "Submitted", "Approved"].includes(item.status))
-    .map(item => ({ ...item, _analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 6)) }))
+    .map(item => ({ ...item, _analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 8)) }))
     .sort((a, b) => {
       const ad = parseDateOnly(a.due)?.getTime?.() || 9e15;
       const bd = parseDateOnly(b.due)?.getTime?.() || 9e15;
@@ -2146,7 +2146,7 @@ function MyWorkView({ board, currentUserEmail, currentUserName, onOpen }: any) {
 function CriticalPathView({ board, onOpen }: any) {
   const today = new Date(new Date().toDateString());
   const active = asArray(board?.groups)
-    .flatMap(group => asArray(group.items).map(item => ({ group, item, range: getTaskRange(item), analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 6)) })))
+    .flatMap(group => asArray(group.items).map(item => ({ group, item, range: getTaskRange(item), analysis: getPlanningAnalysis(item, getOwnerCapacity(board, item.owner, 8)) })))
     .filter(r => !["Done", "Submitted", "Approved"].includes(r.item.status));
 
   const scored = active.map(r => {
@@ -2390,8 +2390,8 @@ function patchTaskOnBoard(board,groupId,itemId,patch){
   };
 }
 function taskDailyHours(item){const r=getTaskRange(item);const effort=getEffortHours(item);if(!r)return effort||0;const days=Math.max(1,diffDays(r.start,r.end)+1);return effort>0?effort/days:1;}
-function planningConflicts(boards){const daily=new Map();for(const {board,item} of getBoardTaskRecords(boards)){if(!isOpenPlanningTask(item))continue;const owner=normalizeOwner(item.owner);if(!owner||owner==="No owner")continue;const r=getTaskRange(item);if(!r)continue;const h=taskDailyHours(item);for(let d=new Date(r.start);d<=r.end;d=addDays(d,1)){const date=d.toISOString().slice(0,10);const cap=getOwnerCapacityForDate(board,owner,date,6);const key=`${board.id}|${owner}|${date}`;const cur=daily.get(key)||{board,owner,date,cap,hours:0,tasks:[]};cur.hours+=h;cur.tasks.push(item.name);daily.set(key,cur);}}return Array.from(daily.values()).filter(x=>x.hours>x.cap).sort((a,b)=>(b.hours-b.cap)-(a.hours-a.cap)).slice(0,10);}
-function ownerLoadScore(board,owner){const cap=getOwnerCapacity(board,owner,6);const items=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)===normalizeOwner(owner));return items.reduce((s,i)=>s+getEffortHours(i),0)/Math.max(cap,1);}
+function planningConflicts(boards){const daily=new Map();for(const {board,item} of getBoardTaskRecords(boards)){if(!isOpenPlanningTask(item))continue;const owner=normalizeOwner(item.owner);if(!owner||owner==="No owner")continue;const r=getTaskRange(item);if(!r)continue;const h=taskDailyHours(item);for(let d=new Date(r.start);d<=r.end;d=addDays(d,1)){const date=d.toISOString().slice(0,10);const cap=getOwnerCapacityForDate(board,owner,date,8);const key=`${board.id}|${owner}|${date}`;const cur=daily.get(key)||{board,owner,date,cap,hours:0,tasks:[]};cur.hours+=h;cur.tasks.push(item.name);daily.set(key,cur);}}return Array.from(daily.values()).filter(x=>x.hours>x.cap).sort((a,b)=>(b.hours-b.cap)-(a.hours-a.cap)).slice(0,10);}
+function ownerLoadScore(board,owner){const cap=getOwnerCapacity(board,owner,8);const items=asArray(board.groups).flatMap(g=>asArray(g.items)).filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)===normalizeOwner(owner));return items.reduce((s,i)=>s+getEffortHours(i),0)/Math.max(cap,1);}
 function autoOwner(board){const owners=getBoardOwners(board).filter(o=>o&&o!=="No owner");return owners.map(owner=>({owner,score:ownerLoadScore(board,owner)})).sort((a,b)=>a.score-b.score)[0]||null;}
 function boardHealth(board){const items=asArray(board.groups).flatMap(g=>asArray(g.items));const total=items.length;const done=items.filter(i=>["Done","Submitted","Approved"].includes(i.status)).length;const overdue=items.filter(i=>isOpenPlanningTask(i)&&isOverdue(i.due)).length;const unassigned=items.filter(i=>isOpenPlanningTask(i)&&normalizeOwner(i.owner)==="No owner").length;const risk=items.filter(i=>["At Risk","Invalid","Tight Review"].includes(getPlanningAnalysis(i,getOwnerCapacity(board,i.owner,6)).risk)).length;const score=Math.max(0,Math.min(100,Math.round(100-overdue*12-risk*8-unassigned*5+(total?done/total:1)*20)));return{score,total,done,overdue,unassigned,risk,level:score>=80?"Good":score>=60?"Medium":"Risky"};}
 
