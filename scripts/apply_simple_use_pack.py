@@ -1,0 +1,528 @@
+from pathlib import Path
+
+p = Path("holifriday-app/src/App.tsx")
+s = p.read_text(encoding="utf-8")
+
+components = r'''
+/* HOLIFRIDAY_SIMPLE_USE_PACK_COMPONENTS */
+
+function suArray(value: any): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function suText(value: any) {
+  return String(value ?? "");
+}
+
+function suIsDone(item: any) {
+  const status = suText(item?.status).trim().toLowerCase();
+  return status === "done" || status === "approved" || status === "cancelled";
+}
+
+function suDateOnly(value: any) {
+  const raw = suText(value).trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function suDaysUntil(value: any) {
+  const d = suDateOnly(value);
+  if (!d) return 9999;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
+}
+
+function suIsMine(item: any, email: any, name: any) {
+  const owner = suText(item?.owner).trim();
+  if (!owner) return false;
+  const e = normalizeEmail(email);
+  const n = suText(name).trim().toLowerCase();
+  const oEmail = normalizeEmail(owner);
+  const oText = owner.toLowerCase();
+  return (!!e && oEmail === e) || (!!n && oText === n) || (!!e && oText === e);
+}
+
+function suTaskRows(boards: any, email: any, name: any, includeDone = false) {
+  const rows: any[] = [];
+  for (const board of suArray(boards).filter((b: any) => !b?.archivedAt)) {
+    for (const group of suArray(board?.groups)) {
+      for (const item of suArray(group?.items)) {
+        if (!suIsMine(item, email, name)) continue;
+        if (!includeDone && suIsDone(item)) continue;
+        rows.push({ board, group, item });
+      }
+    }
+  }
+  return rows;
+}
+
+function suAllTaskRows(boards: any, includeDone = false) {
+  const rows: any[] = [];
+  for (const board of suArray(boards).filter((b: any) => !b?.archivedAt)) {
+    for (const group of suArray(board?.groups)) {
+      for (const item of suArray(group?.items)) {
+        if (!includeDone && suIsDone(item)) continue;
+        rows.push({ board, group, item });
+      }
+    }
+  }
+  return rows;
+}
+
+function suStatusStyle(status: any) {
+  const st = suText(status).toLowerCase();
+  if (st.includes("done") || st.includes("approved")) return { bg: "#e8fff3", color: "#00875a" };
+  if (st.includes("revision") || st.includes("blocked") || st.includes("help")) return { bg: "#fde8ec", color: "#e2445c" };
+  if (st.includes("review")) return { bg: "#eef4ff", color: "#1f5ecf" };
+  if (st.includes("progress")) return { bg: "#fff4dc", color: "#a86400" };
+  return { bg: "#f1f3f8", color: "#676879" };
+}
+
+function suRisk(rows: any[]) {
+  const active = suArray(rows).filter((r: any) => !suIsDone(r.item));
+  const blockers = active.filter((r: any) => /need|blocked|revision/i.test(suText(r.item?.status)));
+  const overdue = active.filter((r: any) => suDaysUntil(r.item?.due) < 0);
+  const dueSoon = active.filter((r: any) => suDaysUntil(r.item?.due) >= 0 && suDaysUntil(r.item?.due) <= 2 && /not started/i.test(suText(r.item?.status)));
+  const review = active.filter((r: any) => /review/i.test(suText(r.item?.status)));
+  if (blockers.length || overdue.length > 2) return { level: "Critical", color: "#e2445c", reason: `${blockers.length} blocker(s), ${overdue.length} overdue task(s)` };
+  if (overdue.length || dueSoon.length || review.length > 3) return { level: "Medium", color: "#fdab3d", reason: `${overdue.length} overdue, ${dueSoon.length} due soon, ${review.length} waiting review` };
+  return { level: "Low", color: "#00c875", reason: "No serious schedule risk found" };
+}
+
+function suTemplateTasks(type: string, deadline: string, owner: string) {
+  const base = type === "Engineering Report"
+    ? ["Data collection", "Methodology draft", "Analysis / simulation", "Figures and maps", "Draft report", "PM review", "Client submission"]
+    : type === "Client Review"
+    ? ["Collect client comments", "Prepare comment response table", "Revise deliverables", "Internal review", "Send revised package"]
+    : type === "Software / Web App"
+    ? ["Define requirements", "Build core flow", "Internal test", "UX cleanup", "Deploy"]
+    : ["Kickoff", "Task planning", "Execution", "Review", "Delivery"];
+  return base.map((name, idx) => ({
+    id: uid(),
+    name,
+    owner: idx === 0 ? owner : "No owner",
+    status: "Not Started",
+    priority: idx <= 1 ? "High" : "Medium",
+    start: "",
+    due: deadline || "",
+    tags: [],
+    comments: [],
+    subtasks: [],
+    approvalHistory: [],
+  }));
+}
+
+function suProjectBoard(payload: any, ownerEmail: string, ownerName: string) {
+  const type = suText(payload?.type || "General Project");
+  const projectName = suText(payload?.name || "New Project").trim() || "New Project";
+  const deadline = suText(payload?.deadline || "");
+  const teamEmails = suText(payload?.members || "").split(/[,\\n;]/).map((x: string) => normalizeEmail(x.trim())).filter(Boolean);
+  const color = "#579bfc";
+  const boardRoles: any = {};
+  boardRoles[memberRoleKey(normalizeEmail(ownerEmail))] = { email: normalizeEmail(ownerEmail), role: "Admin", name: ownerName || ownerEmail };
+  for (const email of teamEmails) boardRoles[memberRoleKey(email)] = { email, role: "Editor", name: email };
+  return {
+    id: uid(),
+    name: projectName,
+    color,
+    boardType: type,
+    deadline,
+    boardRoles,
+    groups: [
+      { id: uid(), name: "Main Work", color, members: teamEmails, memberRoles: {}, invites: [], items: suTemplateTasks(type, deadline, normalizeEmail(ownerEmail)) },
+      { id: uid(), name: "Review", color: "#a25ddc", members: [], memberRoles: {}, invites: [], items: [] },
+      { id: uid(), name: "Client Submission", color: "#00c875", members: [], memberRoles: {}, invites: [], items: [] },
+    ],
+    activityLogs: [],
+    createdAt: new Date().toISOString(),
+    createdBy: normalizeEmail(ownerEmail),
+  };
+}
+
+function SUCard({ title, value, sub, color = "#0073ea", icon = "•" }: any) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 16, padding: 16, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+      <div style={{ fontSize: 20 }}>{icon}</div>
+      <div style={{ marginTop: 6, fontSize: 28, fontWeight: 950, color }}>{value}</div>
+      <div style={{ marginTop: 2, fontSize: 13, fontWeight: 900, color: "#323338" }}>{title}</div>
+      {sub && <div style={{ marginTop: 4, fontSize: 12, color: "#676879" }}>{sub}</div>}
+    </div>
+  );
+}
+
+function SUStartProjectPage({ onCreate, onBack }: any) {
+  const [name, setName] = useState("Sartichala PV Flood Risk Report");
+  const [type, setType] = useState("Engineering Report");
+  const [deadline, setDeadline] = useState("");
+  const [members, setMembers] = useState("");
+
+  return (
+    <div style={{ padding: 24, background: "#f7f8fc", minHeight: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 30, fontWeight: 950, color: "#323338" }}>Start New Project</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#676879" }}>Answer 4 things. HOLIFRIDAY will create the board, tasks, groups, and default roles.</div>
+        </div>
+        <button onClick={onBack} style={{ border: "1px solid #d8dbe4", background: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Back</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(340px, 1fr) minmax(300px, .8fr)", gap: 18 }}>
+        <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+          <div style={{ fontSize: 17, fontWeight: 950 }}>Project setup</div>
+          <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Project name
+              <input value={name} onChange={(e: any) => setName(e.target.value)} style={{ marginTop: 6, width: "100%", border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }} />
+            </label>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Project type
+              <select value={type} onChange={(e: any) => setType(e.target.value)} style={{ marginTop: 6, width: "100%", border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }}>
+                <option>Engineering Report</option>
+                <option>Client Review</option>
+                <option>Software / Web App</option>
+                <option>General Project</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Deadline
+              <input type="date" value={deadline} onChange={(e: any) => setDeadline(e.target.value)} style={{ marginTop: 6, width: "100%", border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }} />
+            </label>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Team emails
+              <textarea value={members} onChange={(e: any) => setMembers(e.target.value)} placeholder={"one email per line\\nor comma separated"} style={{ marginTop: 6, width: "100%", minHeight: 90, border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13, resize: "vertical" }} />
+            </label>
+            <button onClick={() => onCreate({ name, type, deadline, members })} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 10, padding: "12px 14px", fontSize: 13, fontWeight: 950, cursor: "pointer" }}>Create project</button>
+          </div>
+        </div>
+
+        <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+          <div style={{ fontSize: 17, fontWeight: 950 }}>What will be created?</div>
+          <div style={{ display: "grid", gap: 12, marginTop: 16, color: "#676879", fontSize: 13, lineHeight: 1.5 }}>
+            <div>✅ Board for the project</div>
+            <div>✅ Main Work / Review / Client Submission groups</div>
+            <div>✅ Default tasks from selected template</div>
+            <div>✅ Owner as Admin</div>
+            <div>✅ Team members as Editor</div>
+            <div>✅ Ready for My Work and PM Control</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SUInviteTeamPage({ board, onApplyRole, onBack }: any) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("Editor");
+  const link = (() => {
+    try { return `${window.location.origin}${window.location.pathname}${window.location.search || ""}`; }
+    catch { return ""; }
+  })();
+
+  function copyLink() {
+    onApplyRole(email, role);
+    try { navigator.clipboard?.writeText(link); } catch {}
+    window.alert(`Role saved for ${email || "(email missing)"}.\n\nLink copied if browser allowed clipboard access:\n${link}`);
+  }
+
+  return (
+    <div style={{ padding: 24, background: "#f7f8fc", minHeight: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 30, fontWeight: 950, color: "#323338" }}>Invite Team</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#676879" }}>Set role, copy link, send it to your teammate.</div>
+        </div>
+        <button onClick={onBack} style={{ border: "1px solid #d8dbe4", background: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Back</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(340px, 1fr) minmax(300px, .8fr)", gap: 18 }}>
+        <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+          <div style={{ fontSize: 17, fontWeight: 950 }}>Invite for: {board?.name || "Current board"}</div>
+          <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Email
+              <input value={email} onChange={(e: any) => setEmail(e.target.value)} placeholder="teammate@company.com" style={{ marginTop: 6, width: "100%", border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }} />
+            </label>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Role
+              <select value={role} onChange={(e: any) => setRole(e.target.value)} style={{ marginTop: 6, width: "100%", border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13 }}>
+                <option value="Editor">Team Member</option>
+                <option value="Reviewer">Reviewer</option>
+                <option value="Client">Client</option>
+                <option value="Viewer">Viewer</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, fontWeight: 900 }}>Link to send
+              <textarea readOnly value={link} style={{ marginTop: 6, width: "100%", minHeight: 82, border: "1px solid #d8dbe4", borderRadius: 10, padding: 10, fontSize: 13, resize: "vertical" }} />
+            </label>
+            <button onClick={copyLink} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 10, padding: "12px 14px", fontSize: 13, fontWeight: 950, cursor: "pointer" }}>Save role + copy link</button>
+          </div>
+        </div>
+
+        <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 18, padding: 20, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+          <div style={{ fontSize: 17, fontWeight: 950 }}>Role meaning</div>
+          <div style={{ display: "grid", gap: 12, marginTop: 16, fontSize: 13, color: "#676879", lineHeight: 1.5 }}>
+            <div><b style={{ color: "#323338" }}>Team Member</b><br/>Sees mostly My Work and can update assigned tasks.</div>
+            <div><b style={{ color: "#323338" }}>Reviewer</b><br/>Sees review work and can approve/request revision.</div>
+            <div><b style={{ color: "#323338" }}>Client</b><br/>Sees Client View and can submit requests.</div>
+            <div><b style={{ color: "#323338" }}>Viewer</b><br/>Read-only view.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SUPMControlPage({ boards, onOpenBoard, onOpenInvite }: any) {
+  const rows = suAllTaskRows(boards, true);
+  const active = rows.filter((r: any) => !suIsDone(r.item));
+  const blockers = active.filter((r: any) => /need|blocked|revision/i.test(suText(r.item?.status)));
+  const overdue = active.filter((r: any) => suDaysUntil(r.item?.due) < 0);
+  const review = active.filter((r: any) => /review/i.test(suText(r.item?.status)));
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const noUpdate = active.filter((r: any) => !suText(r.item?.updatedAt).startsWith(todayKey));
+  const risk = suRisk(active);
+
+  function MiniList({ title, items, empty }: any) {
+    return (
+      <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 16, padding: 16, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+        <div style={{ fontSize: 16, fontWeight: 950 }}>{title}</div>
+        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+          {suArray(items).slice(0, 8).map((r: any) => (
+            <button key={`${r.board.id}:${r.group.id}:${r.item.id}`} onClick={() => onOpenBoard(r.board.id, r.item.id)} style={{ textAlign: "left", border: "1px solid #f1f2f6", background: "#fff", borderRadius: 12, padding: 10, cursor: "pointer" }}>
+              <div style={{ fontSize: 13, fontWeight: 900, color: "#323338" }}>{r.item.name}</div>
+              <div style={{ marginTop: 3, fontSize: 11, color: "#676879" }}>{r.board.name} • {r.item.owner || "No owner"} • {r.item.status || "No status"}</div>
+            </button>
+          ))}
+          {suArray(items).length === 0 && <div style={{ fontSize: 13, color: "#676879" }}>{empty}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 24, background: "#f7f8fc", minHeight: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 30, fontWeight: 950, color: "#323338" }}>PM Control Center</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#676879" }}>One page to see blockers, overdue work, review queue, and deadline risk.</div>
+        </div>
+        <button onClick={onOpenInvite} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Invite Team</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(140px, 1fr))", gap: 14, marginBottom: 18 }}>
+        <SUCard icon="🚧" title="Blockers" value={blockers.length} color="#e2445c" sub="Need help / revision" />
+        <SUCard icon="⚠️" title="Overdue" value={overdue.length} color="#e2445c" sub="Past due date" />
+        <SUCard icon="👀" title="Ready Review" value={review.length} color="#1f5ecf" sub="Waiting for PM/reviewer" />
+        <SUCard icon="💬" title="No Update Today" value={noUpdate.length} color="#fdab3d" sub="No status update" />
+        <SUCard icon="🔥" title="Deadline Risk" value={risk.level} color={risk.color} sub={risk.reason} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(300px, 1fr))", gap: 16 }}>
+        <MiniList title="Blockers / Need Help" items={blockers} empty="No blockers right now." />
+        <MiniList title="Overdue tasks" items={overdue} empty="No overdue tasks." />
+        <MiniList title="Ready for Review" items={review} empty="No review queue." />
+        <MiniList title="No Update Today" items={noUpdate} empty="Everyone has updated today." />
+      </div>
+    </div>
+  );
+}
+
+function SUSimpleMyWorkPage({ boards, currentUserEmail, currentUserName, onPatchBoard, onOpenBoard, onOpenReport }: any) {
+  const [showDone, setShowDone] = useState(false);
+  const rows = suTaskRows(boards, currentUserEmail, currentUserName, showDone);
+  const allMine = suTaskRows(boards, currentUserEmail, currentUserName, true);
+  const open = allMine.filter((r: any) => !suIsDone(r.item));
+  const overdue = open.filter((r: any) => suDaysUntil(r.item?.due) < 0);
+  const dueToday = open.filter((r: any) => suDaysUntil(r.item?.due) === 0);
+  const review = open.filter((r: any) => /review/i.test(suText(r.item?.status)));
+  const done = allMine.filter((r: any) => suIsDone(r.item));
+
+  function updateTask(row: any, patch: any, note: string) {
+    onPatchBoard(row.board.id, (current: any) => ({
+      ...current,
+      groups: suArray(current.groups).map((g: any) => g.id === row.group.id ? {
+        ...g,
+        items: suArray(g.items).map((it: any) => it.id === row.item.id ? {
+          ...it,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+          updatedBy: normalizeEmail(currentUserEmail),
+          comments: [...suArray(it.comments), note],
+        } : it),
+      } : g),
+    }));
+  }
+
+  function needHelp(row: any) {
+    const msg = window.prompt("What is blocking you?", "");
+    if (msg === null) return;
+    updateTask(row, { status: "Need Revision" }, `Need Help: ${msg || "Need help / blocker reported."}`);
+  }
+
+  function dailyCheckIn() {
+    if (open.length === 0) {
+      window.alert("No open task to check in.");
+      return;
+    }
+    const msg = window.prompt("Daily check-in: what did you work on today?", "");
+    if (!msg?.trim()) return;
+    const row = open[0];
+    updateTask(row, {}, `Daily check-in: ${msg.trim()}`);
+    window.alert(`Check-in added to: ${row.item.name}`);
+  }
+
+  return (
+    <div style={{ padding: 24, background: "#f7f8fc", minHeight: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
+        <div>
+          <div style={{ fontSize: 30, fontWeight: 950, color: "#323338" }}>My Work</div>
+          <div style={{ marginTop: 6, fontSize: 13, color: "#676879" }}>Your tasks only. Update status with one click.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <button onClick={dailyCheckIn} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Daily check-in</button>
+          <button onClick={() => setShowDone((v: boolean) => !v)} style={{ border: "1px solid #d8dbe4", background: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>{showDone ? "Hide done" : "Show done"}</button>
+          <button onClick={onOpenReport} style={{ border: "1px solid #d8dbe4", background: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>Open Report</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(140px, 1fr))", gap: 14, marginBottom: 18 }}>
+        <SUCard icon="📌" title="Open tasks" value={open.length} color="#0073ea" />
+        <SUCard icon="⚠️" title="Overdue" value={overdue.length} color="#e2445c" />
+        <SUCard icon="📍" title="Due today" value={dueToday.length} color="#fdab3d" />
+        <SUCard icon="👀" title="Waiting review" value={review.length} color="#1f5ecf" />
+        <SUCard icon="🏁" title="Done" value={done.length} color="#00c875" />
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #eceef5", borderRadius: 18, padding: 18, boxShadow: "0 8px 24px rgba(29,37,71,.06)" }}>
+        <div style={{ fontSize: 17, fontWeight: 950 }}>Task list</div>
+        <div style={{ marginTop: 4, fontSize: 12, color: "#676879" }}>Start, Done, Need Help, or Send to Review. No PM tools here.</div>
+        <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+          {rows.map((row: any) => {
+            const badge = suStatusStyle(row.item?.status);
+            const days = suDaysUntil(row.item?.due);
+            const leftColor = suIsDone(row.item) ? "#00c875" : days < 0 ? "#e2445c" : days <= 1 ? "#fdab3d" : "#0073ea";
+            return (
+              <div key={`${row.board.id}:${row.group.id}:${row.item.id}`} style={{ border: "1px solid #f1f2f6", borderLeft: `5px solid ${leftColor}`, borderRadius: 14, padding: 14, background: "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 950 }}>{row.item.name}</div>
+                    <div style={{ marginTop: 4, fontSize: 11, color: "#676879" }}>{row.board.name} • due {row.item.due || "not set"} • priority {row.item.priority || "Medium"}</div>
+                  </div>
+                  <span style={{ alignSelf: "flex-start", borderRadius: 999, padding: "5px 9px", fontSize: 10, fontWeight: 950, background: badge.bg, color: badge.color }}>{row.item.status || "Not Started"}</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                  <button onClick={() => updateTask(row, { status: "In Progress" }, "Started work.")} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Start</button>
+                  <button onClick={() => updateTask(row, { status: "Done" }, "Marked as done.")} style={{ border: "none", background: "#00c875", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Done</button>
+                  <button onClick={() => needHelp(row)} style={{ border: "none", background: "#e2445c", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Need Help</button>
+                  <button onClick={() => updateTask(row, { status: "Ready for PM Review" }, "Sent to PM review.")} style={{ border: "none", background: "#579bfc", color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Send to Review</button>
+                  <button onClick={() => onOpenBoard(row.board.id, row.item.id)} style={{ border: "1px solid #d8dbe4", background: "#fff", color: "#323338", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 900, cursor: "pointer" }}>Open</button>
+                </div>
+              </div>
+            );
+          })}
+          {rows.length === 0 && (
+            <div style={{ border: "1px dashed #d8dbe4", borderRadius: 16, padding: 32, textAlign: "center" }}>
+              <div style={{ fontSize: 34 }}>🎉</div>
+              <div style={{ marginTop: 8, fontSize: 16, fontWeight: 950 }}>No assigned tasks</div>
+              <div style={{ marginTop: 5, fontSize: 13, color: "#676879" }}>When PM assigns work to you, it will appear here.</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+'''
+
+if "/* HOLIFRIDAY_SIMPLE_USE_PACK_COMPONENTS */" not in s:
+    if "function WorkspaceBadge" not in s:
+        raise SystemExit("Cannot find insertion point: function WorkspaceBadge")
+    s = s.replace("function WorkspaceBadge", components + "\nfunction WorkspaceBadge", 1)
+
+handlers = r'''
+  /* HOLIFRIDAY_SIMPLE_USE_PACK_HANDLERS */
+  function createSimpleUseProject(payload: any) {
+    const board = suProjectBoard(payload, authUser?.email || "", authUser?.displayName || authUser?.email || "");
+    setBoards(prev => [...suArray(prev), board]);
+    setActiveId(board.id);
+    setActiveView("boards");
+  }
+
+  function applySimpleUseInvite(emailRaw: any, roleRaw: any) {
+    const email = normalizeEmail(emailRaw);
+    if (!email) {
+      window.alert("Please enter teammate email first.");
+      return;
+    }
+    const role = suText(roleRaw || "Editor");
+    const targetBoard = activeBoard;
+    if (!targetBoard) {
+      window.alert("Create or select a board first.");
+      return;
+    }
+    patchBoardById(targetBoard.id, (current: any) => ({
+      ...current,
+      boardRoles: {
+        ...(current.boardRoles || {}),
+        [memberRoleKey(email)]: { email, role, name: email },
+      },
+      groups: suArray(current.groups).map((g: any, idx: number) => idx === 0 ? {
+        ...g,
+        members: Array.from(new Set([...suArray(g.members), email])),
+      } : g),
+    }));
+  }
+'''
+
+if "/* HOLIFRIDAY_SIMPLE_USE_PACK_HANDLERS */" not in s:
+    marker = '''  function openBoardFromUxPage(boardId: any, itemId: any = null) {
+    if (boardId) setActiveId(boardId);
+    setActiveView("boards");
+    if (itemId) setJumpItemId(itemId);
+  }
+'''
+    if marker not in s:
+        raise SystemExit("Cannot find insertion point: openBoardFromUxPage")
+    s = s.replace(marker, marker + "\n" + handlers, 1)
+
+if 'setActiveView("projectWizard")' not in s:
+    marker = '''            <button onClick={() => {
+              const name = window.prompt("Task name");'''
+    buttons = '''            <button onClick={() => setActiveView("projectWizard")} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>+ Start Project</button>
+            <button onClick={() => setActiveView("pmControl")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>PM Control</button>
+            <button onClick={() => setActiveView("inviteTeam")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Invite Team</button>
+'''
+    if marker in s:
+        s = s.replace(marker, buttons + marker, 1)
+
+if 'activeView === "projectWizard"' not in s:
+    route_marker = '''        {activeView === "templates"
+          ? <ProjectTemplatesPage onCreateTemplate={createProjectTemplate} onBack={() => setActiveView("home")} />'''
+    route_new = '''        {activeView === "projectWizard"
+          ? <SUStartProjectPage onCreate={createSimpleUseProject} onBack={() => setActiveView("home")} />
+          : activeView === "inviteTeam"
+          ? <SUInviteTeamPage board={activeBoard} onApplyRole={applySimpleUseInvite} onBack={() => setActiveView("home")} />
+          : activeView === "pmControl"
+          ? <SUPMControlPage boards={boards} onOpenBoard={openBoardFromUxPage} onOpenInvite={() => setActiveView("inviteTeam")} />
+          : activeView === "templates"
+          ? <ProjectTemplatesPage onCreateTemplate={createProjectTemplate} onBack={() => setActiveView("home")} />'''
+    if route_marker not in s:
+        raise SystemExit("Cannot find route insertion marker")
+    s = s.replace(route_marker, route_new, 1)
+
+old_mywork = '''          ? <MyWorkPage boards={boards} currentUserEmail={authUser.email} currentUserName={authUser.displayName || authUser.email} onPatchBoard={patchBoardById} onOpenBoard={(boardId?: any) => { if (boardId) setActiveId(boardId); setActiveView("boards"); }} onOpenReport={() => setActiveView("dashboard")} />'''
+new_mywork = '''          ? <SUSimpleMyWorkPage boards={boards} currentUserEmail={authUser.email} currentUserName={authUser.displayName || authUser.email} onPatchBoard={patchBoardById} onOpenBoard={openBoardFromUxPage} onOpenReport={() => setActiveView("dashboard")} />'''
+if old_mywork in s:
+    s = s.replace(old_mywork, new_mywork, 1)
+
+required = [
+    "function SUStartProjectPage",
+    "function SUInviteTeamPage",
+    "function SUPMControlPage",
+    "function SUSimpleMyWorkPage",
+    'activeView === "projectWizard"',
+]
+missing = [m for m in required if m not in s]
+if missing:
+    raise SystemExit("Missing required markers: " + ", ".join(missing))
+
+p.write_text(s, encoding="utf-8")
+print("HOLIFRIDAY Simple Use Pack applied.")
