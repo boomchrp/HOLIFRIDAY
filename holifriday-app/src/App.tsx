@@ -1369,18 +1369,6 @@ function DotSlider({ value, options, onChange, width = 170, disabled = false }) 
           ))}
         </div>
       )}
-      <div style={{ display: "flex", gap: 4, marginTop: 4, overflowX: "auto", paddingBottom: 2 }}>
-        {options.map((opt, idx) => (
-          <button
-            key={`${opt.label}-chip`}
-            disabled={disabled}
-            onClick={() => onChange(opt.label)}
-            style={{ border: activeIndex === idx ? "none" : "1px solid #d8dbe4", background: activeIndex === idx ? opt.color : "#fff", color: activeIndex === idx ? "#fff" : "#676879", borderRadius: 999, padding: "2px 7px", fontSize: 10, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -4291,6 +4279,9 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
   const [ownerSlideIndex, setOwnerSlideIndex] = useState(0);
   const [panelItem, setPanelItem] = useState(null);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const shortcutsRef = useRef<HTMLDivElement | null>(null);
+  useClickOutside(shortcutsRef, () => setShortcutsOpen(false));
   const boardRole = getBoardRole(board, currentUserEmail);
   const boardPermissions = getBoardPermissions(boardRole || "Admin");
   const normalizedUserEmail = normalizeEmail(currentUserEmail);
@@ -4544,21 +4535,27 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
           ))}
         </div>
         <span style={{ background: boardPermissions.canEdit ? "#e8fff3" : boardPermissions.canReview ? "#eef4ff" : "#f6f7fb", color: boardPermissions.canEdit ? "#00a35a" : boardPermissions.canReview ? "#1f5ecf" : "#676879", borderRadius: 999, padding: "3px 9px", fontSize: 11, fontWeight: 900 }}>Your role: {boardRole}</span>
+          <div ref={shortcutsRef} style={{ position: "relative" }}>
+            <button onClick={() => setShortcutsOpen(v => !v)} title="Keyboard shortcuts" style={{ background: "#fff", color: "#676879", border: "1px solid #d8dbe4", borderRadius: 20, width: 32, height: 32, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>⌨</button>
+            {shortcutsOpen && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 1100, background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.15)", padding: 12, width: 220 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#98a1b3", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Keyboard shortcuts</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {[["N","New Task"],["G","New Group"],["T","Table"],["K","Board"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
+                    <div key={key} style={{ fontSize: 12, color: "#676879", display: "flex", alignItems: "center", gap: 8 }}>
+                      <kbd style={{ background: "#f7f8fc", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontFamily: "monospace", color: "#323338", minWidth: 20, textAlign: "center" }}>{key}</kbd>
+                      {label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <button onClick={() => setActivityOpen(true)} style={{ background: "#fff", color: "#323338", border: "1px solid #d8dbe4", borderRadius: 20, padding: "7px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Activity</button>
         <button onClick={addGroup} disabled={!canCreateGroup} style={{ background: canCreateGroup ? "#0073ea" : "#c4cad6", color: "#fff", border: "none", borderRadius: 20, padding: "7px 18px", fontWeight: 700, fontSize: 13, cursor: canCreateGroup ? "pointer" : "not-allowed" }}
           onMouseEnter={e => e.currentTarget.style.background = "#0060c0"}
           onMouseLeave={e => e.currentTarget.style.background = canCreateGroup ? "#0073ea" : "#c4cad6"}
         >+ New Group</button>
-      </div>
-
-      {/* Keyboard shortcut hint */}
-      <div style={{ background: "#f7f8fc", borderBottom: "1px solid #f0f0f0", padding: "4px 28px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Board"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
-          <span key={key} style={{ fontSize: 11, color: "#98a1b3", display: "flex", alignItems: "center", gap: 4 }}>
-            <kbd style={{ background: "#fff", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", color: "#323338", boxShadow: "0 1px 2px rgba(0,0,0,.06)" }}>{key}</kbd>
-            {label}
-          </span>
-        ))}
       </div>
 
       {/* Filter bar */}
@@ -6365,6 +6362,9 @@ function AppContent() {
   const [simpleMode, setSimpleMode] = useLocalStorage("holifriday_simple_mode", true);
   const [dueBanner, setDueBanner] = useState<string[]>([]);
   const [mergeConflict, setMergeConflict] = useState<any | null>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  useClickOutside(moreMenuRef, () => setMoreMenuOpen(false));
   const boardsRef = useRef<any[]>(boards);
 
   const activeBoards = asArray(boards).filter((b: any) => !b.archivedAt);
@@ -6901,9 +6901,6 @@ function AppContent() {
             <button onClick={() => { if (activeBoardMinimalPerms.canAdmin) setSimpleMode((v: boolean) => !v); }} title={activeBoardMinimalPerms.canAdmin ? "Switch between simple and advanced mode" : "Team users stay in minimal mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
               {activeBoardMinimalPerms.isTeam ? "Team mode" : simpleMode ? "Simple mode" : "Advanced mode"}
             </button>
-            <button onClick={() => setActiveView("projectWizard")} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>+ Start Project</button>
-            <button onClick={() => setActiveView("pmControl")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>PM Control</button>
-            <button onClick={() => setActiveView("inviteTeam")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Invite Team</button>
             <button onClick={() => {
               const name = window.prompt("Task name");
               if (!name?.trim()) return;
@@ -6914,21 +6911,35 @@ function AppContent() {
               patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
               setActiveId(b.id); setActiveView("boards");
             }} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Task</button>
-            <button onClick={() => {
-              const name = window.prompt("Board name");
-              if (name?.trim()) addBoard(name.trim());
-            }} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Board</button>
             <button onClick={() => setGlobalSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, background: dark ? "#1a1a2e" : "#f5f6fb", color: dark ? "#aaa" : "#676879", borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
               <span>🔍</span><span>Search all boards</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
             </button>
-            <button onClick={handleExportBoards} title="Export boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export backup</button>
-            <button onClick={handleImportBoards} title="Import boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Import backup</button>
             {/* Dark mode toggle */}
             <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
               {dark ? "☀️" : "🌙"}
             </button>
-            <button onClick={logout} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Log out</button>
+            <div ref={moreMenuRef} style={{ position: "relative" }}>
+              <button onClick={() => setMoreMenuOpen(v => !v)} title="More actions" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 12px", fontSize: 14, fontWeight: 800, cursor: "pointer", lineHeight: 1 }}>⋯</button>
+              {moreMenuOpen && (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 1100, background: dark ? "#1a1a2e" : "#fff", border: `1px solid ${dark ? "#2a2a4a" : "#e6e9ef"}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.18)", padding: 6, minWidth: 190, display: "flex", flexDirection: "column" }}>
+                  {[
+                    { label: "+ Start Project", onClick: () => setActiveView("projectWizard") },
+                    { label: "+ New Board", onClick: () => { const name = window.prompt("Board name"); if (name?.trim()) addBoard(name.trim()); } },
+                    { label: "PM Control", onClick: () => setActiveView("pmControl") },
+                    { label: "Invite Team", onClick: () => setActiveView("inviteTeam") },
+                    { label: "Export backup", onClick: handleExportBoards },
+                    { label: "Import backup", onClick: handleImportBoards },
+                    { label: "Log out", onClick: logout },
+                  ].map(opt => (
+                    <button key={opt.label} onClick={() => { opt.onClick(); setMoreMenuOpen(false); }} style={{ border: "none", background: "none", color: dark ? "#e0e0f0" : "#323338", borderRadius: 6, padding: "8px 10px", fontSize: 12, fontWeight: 700, textAlign: "left", cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = dark ? "#22223a" : "#f5f6fb"}
+                      onMouseLeave={e => e.currentTarget.style.background = "none"}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {/* Due date personal banner */}
