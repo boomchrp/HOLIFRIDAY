@@ -5814,6 +5814,34 @@ function Sidebar({ boards, activeId, activeView, onSelect, onAdd, onDelete, onCh
   );
 }
 
+function TopBarMenu({ label, items, dark, primary = false }: { label: string; items: { label: string; onClick: () => void }[]; dark: boolean; primary?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useClickOutside(ref, () => setOpen(false));
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button onClick={() => setOpen(v => !v)} style={{ border: primary ? "none" : `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: primary ? "#0073ea" : dark ? "#1a1a2e" : "#fff", color: primary ? "#fff" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: primary ? 900 : 800, cursor: "pointer" }}>
+        {label} <span style={{ fontSize: 9 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, minWidth: 170, background: dark ? "#1a1a2e" : "#fff", border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, borderRadius: 10, boxShadow: "0 10px 30px rgba(0,0,0,.15)", padding: 6, zIndex: 20 }}>
+          {items.map((it, i) => (
+            <button
+              key={i}
+              onClick={() => { it.onClick(); setOpen(false); }}
+              style={{ display: "block", width: "100%", textAlign: "left", border: "none", background: "none", color: dark ? "#e0e0f0" : "#323338", padding: "8px 10px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+              onMouseEnter={e => { e.currentTarget.style.background = dark ? "rgba(255,255,255,.06)" : "#f5f6fb"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "none"; }}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 function MergeConflictDialog({ conflict, onUseMine, onUseServer, onUseSmart, onCancel }: { conflict: any; onUseMine: () => void; onUseServer: () => void; onUseSmart: () => void; onCancel: () => void }) {
@@ -6901,29 +6929,48 @@ function AppContent() {
             <button onClick={() => { if (activeBoardMinimalPerms.canAdmin) setSimpleMode((v: boolean) => !v); }} title={activeBoardMinimalPerms.canAdmin ? "Switch between simple and advanced mode" : "Team users stay in minimal mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
               {activeBoardMinimalPerms.isTeam ? "Team mode" : simpleMode ? "Simple mode" : "Advanced mode"}
             </button>
-            <button onClick={() => setActiveView("projectWizard")} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>+ Start Project</button>
-            <button onClick={() => setActiveView("pmControl")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>PM Control</button>
-            <button onClick={() => setActiveView("inviteTeam")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Invite Team</button>
-            <button onClick={() => {
-              const name = window.prompt("Task name");
-              if (!name?.trim()) return;
-              const b = activeBoard;
-              const g = asArray(b?.groups)[0];
-              if (!b || !g) { window.alert("Create a board first."); return; }
-              const newTask = { id: uid(), name: name.trim(), owner: "No owner", status: "Not Started", priority: "Medium", start: "", due: "", tags: [], comments: [], subtasks: [], approvalHistory: [] };
-              patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
-              setActiveId(b.id); setActiveView("boards");
-            }} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Task</button>
-            <button onClick={() => {
-              const name = window.prompt("Board name");
-              if (name?.trim()) addBoard(name.trim());
-            }} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Board</button>
+            <TopBarMenu
+              dark={dark}
+              primary
+              label="+ New"
+              items={[
+                {
+                  label: "New Task",
+                  onClick: () => {
+                    const name = window.prompt("Task name");
+                    if (!name?.trim()) return;
+                    const b = activeBoard;
+                    const g = asArray(b?.groups)[0];
+                    if (!b || !g) { window.alert("Create a board first."); return; }
+                    const newTask = { id: uid(), name: name.trim(), owner: "No owner", status: "Not Started", priority: "Medium", start: "", due: "", tags: [], comments: [], subtasks: [], approvalHistory: [] };
+                    patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
+                    setActiveId(b.id); setActiveView("boards");
+                  },
+                },
+                {
+                  label: "New Board",
+                  onClick: () => {
+                    const name = window.prompt("Board name");
+                    if (name?.trim()) addBoard(name.trim());
+                  },
+                },
+                { label: "Start Project Wizard", onClick: () => setActiveView("projectWizard") },
+              ]}
+            />
             <button onClick={() => setGlobalSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, background: dark ? "#1a1a2e" : "#f5f6fb", color: dark ? "#aaa" : "#676879", borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
               <span>🔍</span><span>Search all boards</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
             </button>
-            <button onClick={handleExportBoards} title="Export boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export backup</button>
-            <button onClick={handleImportBoards} title="Import boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Import backup</button>
+            <TopBarMenu
+              dark={dark}
+              label="More"
+              items={[
+                { label: "PM Control", onClick: () => setActiveView("pmControl") },
+                { label: "Invite Team", onClick: () => setActiveView("inviteTeam") },
+                { label: "Export backup", onClick: handleExportBoards },
+                { label: "Import backup", onClick: handleImportBoards },
+              ]}
+            />
             {/* Dark mode toggle */}
             <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
               {dark ? "☀️" : "🌙"}
