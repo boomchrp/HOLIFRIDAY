@@ -1369,18 +1369,6 @@ function DotSlider({ value, options, onChange, width = 170, disabled = false }) 
           ))}
         </div>
       )}
-      <div style={{ display: "flex", gap: 4, marginTop: 4, overflowX: "auto", paddingBottom: 2 }}>
-        {options.map((opt, idx) => (
-          <button
-            key={`${opt.label}-chip`}
-            disabled={disabled}
-            onClick={() => onChange(opt.label)}
-            style={{ border: activeIndex === idx ? "none" : "1px solid #d8dbe4", background: activeIndex === idx ? opt.color : "#fff", color: activeIndex === idx ? "#fff" : "#676879", borderRadius: 999, padding: "2px 7px", fontSize: 10, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -4283,7 +4271,7 @@ function ActivityLogPanel({ logs, onClose }: any) {
 // ─── Board View ───────────────────────────────────────────────────────────────
 
 function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName, currentUserEmail, jumpItemId = null, onJumpHandled = null }: any) {
-  const [view, setView] = useState("table"); // table | kanban | calendar | workload
+  const [view, setView] = useState("table"); // table | calendar | mywork | workload | critical | planning
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All");
@@ -4329,7 +4317,6 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
       }
       if (e.key === "g" || e.key === "G") { if (canCreateGroup) addGroup(); return; }
       if (e.key === "t" || e.key === "T") { setView("table"); return; }
-      if (e.key === "k" || e.key === "K") { setView("kanban"); return; }
       if (e.key === "c" || e.key === "C") { setView("calendar"); return; }
       if (e.key === "w" || e.key === "W") { setView("workload"); return; }
       if (e.key === "m" || e.key === "M") { setView("mywork"); return; }
@@ -4539,7 +4526,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
         </div>
         {/* View toggle */}
         <div style={{ display: "flex", gap: 4, marginLeft: "auto", background: "#f6f7fb", borderRadius: 8, padding: 3 }}>
-          {[["table","☰ Table"],["kanban","⬡ Board"],["calendar","🗓 Calendar"],["mywork","👤 My Work"],["workload","👥 Workload"],["critical","🧭 Critical"],["planning","🧠 Planning"]].map(([v,label]) => (
+          {[["table","☰ Table"],["calendar","🗓 Calendar"],["mywork","👤 My Work"],["workload","👥 Workload"],["critical","🧭 Critical"],["planning","🧠 Planning"]].map(([v,label]) => (
             <button key={v} onClick={() => setView(v)} style={{ background: view === v ? "#fff" : "none", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 700, color: view === v ? "#0073ea" : "#676879", cursor: "pointer", boxShadow: view === v ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{label}</button>
           ))}
         </div>
@@ -4553,7 +4540,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
 
       {/* Keyboard shortcut hint */}
       <div style={{ background: "#f7f8fc", borderBottom: "1px solid #f0f0f0", padding: "4px 28px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-        {[["N","New Task"],["G","New Group"],["T","Table"],["K","Board"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
+        {[["N","New Task"],["G","New Group"],["T","Table"],["C","Calendar"],["W","Workload"],["M","My Work"],["X","Critical"],["P","Planning"],["/","Search"],["Esc","Close"]].map(([key, label]) => (
           <span key={key} style={{ fontSize: 11, color: "#98a1b3", display: "flex", alignItems: "center", gap: 4 }}>
             <kbd style={{ background: "#fff", border: "1px solid #dde1ec", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", color: "#323338", boxShadow: "0 1px 2px rgba(0,0,0,.06)" }}>{key}</kbd>
             {label}
@@ -4608,9 +4595,7 @@ function BoardView({ board, onUpdate, onPatchBoard, onCelebrate, currentUserName
       </div>
 
       {/* Content */}
-      {view === "kanban" ? (
-        <BoardView board={filteredBoard} onUpdate={updatedVisibleBoard => mergeFilteredBoardUpdate(filteredBoard, updatedVisibleBoard)} onCelebrate={onCelebrate} currentUserName={currentUserName} currentUserEmail={currentUserEmail} />
-      ) : view === "calendar" ? (
+      {view === "calendar" ? (
         <CalendarTimelineView board={filteredBoard} onOpen={handleOpenItem} />
       ) : view === "mywork" ? (
         <MyWorkView board={board} currentUserEmail={currentUserEmail} currentUserName={currentUserName} onOpen={handleOpenItem} />
@@ -6374,6 +6359,9 @@ function AppContent() {
   const inviteTarget = useMemo(() => resolveInviteTarget(boards, inviteToken), [boards, inviteToken]);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [jumpItemId, setJumpItemId] = useState<any>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  useClickOutside(moreMenuRef, () => setMoreMenuOpen(false));
 
   useEffect(() => {
     boardsRef.current = boards;
@@ -6901,9 +6889,6 @@ function AppContent() {
             <button onClick={() => { if (activeBoardMinimalPerms.canAdmin) setSimpleMode((v: boolean) => !v); }} title={activeBoardMinimalPerms.canAdmin ? "Switch between simple and advanced mode" : "Team users stay in minimal mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: simpleMode ? "#eef4ff" : dark ? "#1a1a2e" : "#fff", color: simpleMode ? "#1f5ecf" : dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
               {activeBoardMinimalPerms.isTeam ? "Team mode" : simpleMode ? "Simple mode" : "Advanced mode"}
             </button>
-            <button onClick={() => setActiveView("projectWizard")} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>+ Start Project</button>
-            <button onClick={() => setActiveView("pmControl")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>PM Control</button>
-            <button onClick={() => setActiveView("inviteTeam")} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Invite Team</button>
             <button onClick={() => {
               const name = window.prompt("Task name");
               if (!name?.trim()) return;
@@ -6914,21 +6899,41 @@ function AppContent() {
               patchBoardById(b.id, current => ({ ...current, groups: asArray(current.groups).map((group, idx) => idx === 0 ? { ...group, items: [newTask, ...asArray(group.items)] } : group) }));
               setActiveId(b.id); setActiveView("boards");
             }} style={{ border: "none", background: "#0073ea", color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Task</button>
-            <button onClick={() => {
-              const name = window.prompt("Board name");
-              if (name?.trim()) addBoard(name.trim());
-            }} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>+ New Board</button>
             <button onClick={() => setGlobalSearchOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${dark ? "#2a2a4a" : "#e0e3ef"}`, background: dark ? "#1a1a2e" : "#f5f6fb", color: dark ? "#aaa" : "#676879", borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-              <span>🔍</span><span>Search all boards</span>
+              <span>🔍</span><span>Search</span>
               <kbd style={{ border: `1px solid ${dark ? "#3a3a5a" : "#d4d7e3"}`, borderRadius: 4, padding: "1px 5px", fontSize: 10, fontFamily: "monospace", background: dark ? "#0f0f1e" : "#fff", color: dark ? "#ccc" : "#323338" }}>⌘K</kbd>
             </button>
-            <button onClick={handleExportBoards} title="Export boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export backup</button>
-            <button onClick={handleImportBoards} title="Import boards backup" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Import backup</button>
             {/* Dark mode toggle */}
             <button onClick={() => setDark((v: boolean) => !v)} title={dark ? "Switch to Light mode" : "Switch to Dark mode"} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>
               {dark ? "☀️" : "🌙"}
             </button>
-            <button onClick={logout} style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: dark ? "#1a1a2e" : "#fff", color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Log out</button>
+            <div ref={moreMenuRef} style={{ position: "relative" }}>
+              <button onClick={() => setMoreMenuOpen(v => !v)} title="More actions" style={{ border: `1px solid ${dark ? "#2a2a4a" : "#d8dbe4"}`, background: moreMenuOpen ? (dark ? "#232345" : "#eef4ff") : (dark ? "#1a1a2e" : "#fff"), color: dark ? "#e0e0f0" : "#323338", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                More ▾
+              </button>
+              {moreMenuOpen && (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 1200, minWidth: 200, background: dark ? "#1a1a2e" : "#fff", border: `1px solid ${dark ? "#2a2a4a" : "#e6e9ef"}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.18)", padding: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                  {([
+                    ["+ Start Project", () => setActiveView("projectWizard")],
+                    ["PM Control", () => setActiveView("pmControl")],
+                    ["Invite Team", () => setActiveView("inviteTeam")],
+                    ["+ New Board", () => { const name = window.prompt("Board name"); if (name?.trim()) addBoard(name.trim()); }],
+                    ["Export backup", handleExportBoards],
+                    ["Import backup", handleImportBoards],
+                  ] as [string, () => void][]).map(([label, onClick]) => (
+                    <button key={label} onClick={() => { onClick(); setMoreMenuOpen(false); }} style={{ textAlign: "left", border: "none", background: "none", color: dark ? "#e0e0f0" : "#323338", borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = dark ? "#232345" : "#f5f6fb"}
+                      onMouseLeave={e => e.currentTarget.style.background = "none"}
+                    >{label}</button>
+                  ))}
+                  <div style={{ height: 1, background: dark ? "#2a2a4a" : "#eceef5", margin: "4px 0" }} />
+                  <button onClick={() => { setMoreMenuOpen(false); logout(); }} style={{ textAlign: "left", border: "none", background: "none", color: "#e2445c", borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                    onMouseEnter={e => e.currentTarget.style.background = dark ? "#232345" : "#f5f6fb"}
+                    onMouseLeave={e => e.currentTarget.style.background = "none"}
+                  >Log out</button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {/* Due date personal banner */}
